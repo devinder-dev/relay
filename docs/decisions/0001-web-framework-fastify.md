@@ -32,7 +32,7 @@ Both of us are examined individually and must be able to explain every line.
 We use **Fastify 5** on Bun 1.4.4.
 
 Familiarity was the deciding factor: we can write, review and explain Fastify code with
-confidence. Its built-in pino logging and JSON Schema validation also cover two needs we
+confidence. Its built-in pino logging (with a request id on every line) also covers a need we
 would otherwise build ourselves.
 
 ## Consequences
@@ -46,5 +46,7 @@ would otherwise build ourselves.
   `server.ts` only calls `listen()` and handles SIGTERM with `app.close()`.
 - **Logging:** pino, built into Fastify, writing JSON to stdout. We keep our agreed field names
   (`request_id`, `event_id`, `delivery_id`, `endpoint_id`, `status_code`, `duration_ms`).
-- **Validation:** JSON Schema on each route. A bad body gets a 400 automatically.
+- **Validation:** Zod, called in each route ([decision 0003](0003-api-code-structure.md)). We don't
+  use Fastify's built-in JSON Schema validation: with Zod each body is described once and gives
+  both the runtime check and the TypeScript type.
 - **CORS:** the `@fastify/cors` plugin, limited to `https://cdn.myrelay.tech` (and localhost in CI).

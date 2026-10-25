@@ -91,8 +91,9 @@ Owners and API keys are created with a `create-owner` script (no signup page).
 | Area | Choice | Not chosen |
 |---|---|---|
 | Runtime | Bun **1.4.4**, pinned everywhere (laptop, CI, Docker). 1.4 is a new rewrite in Rust | Node (more common, but we know Bun; it stays our fallback) |
-| Web framework | **Fastify 5** ([decision 0001](decisions/0001-web-framework-fastify.md)): `buildApp()` + `listen({ host: "0.0.0.0" })`, pino logs, JSON Schema validation, `@fastify/cors`, `inject()` tests | Hono (native on Bun, but new to us), Express, Elysia |
+| Web framework | **Fastify 5** ([decision 0001](decisions/0001-web-framework-fastify.md)): `buildApp()` + `listen({ host: "0.0.0.0" })`, pino logs, Zod validation, `@fastify/cors`, `inject()` tests | Hono (native on Bun, but new to us), Express, Elysia |
 | Database library | postgres.js behind one file `src/db.ts` | `Bun.sql` (ties the data layer to the new runtime), Drizzle |
+| API code structure | **Zod 4** for bodies, queries and env vars ([decision 0003](decisions/0003-api-code-structure.md)); layers routes → services → repositories; one Fastify error handler with one error shape; small files, one job each | Fastify JSON Schema, `fastify-type-provider-zod`, logic in route handlers |
 | Migrations | dbmate (plain SQL), run by a Kubernetes Job before each rollout. Expand/contract rule | drizzle-kit, an initContainer (would rerun on every scale-up) |
 | Unit + integration tests | `bun test`; integration against a real Postgres (Docker locally, service container in GitHub Actions) | Testcontainers (no official Bun support), mocked DB |
 | Dashboard | **Vite + React + TypeScript, Tailwind CSS v4, React Router, axios** (one client in `src/api.ts`), plain React state with a small refresh loop while a delivery is pending, served by nginx ([decision 0002](decisions/0002-dashboard-stack.md)) | Next.js, plain CSS, `fetch`, TanStack Query |

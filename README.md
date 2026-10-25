@@ -27,7 +27,7 @@ Relay sits in the middle:
 
 ## Stack
 
-Bun 1.4 + TypeScript + Fastify · React + Vite + Tailwind dashboard ·
+Bun 1.4 + TypeScript + Fastify + Zod · React + Vite + Tailwind dashboard ·
 PostgreSQL 18 (also the job queue, via `SKIP LOCKED`) ·
 k3s on our own VPS · Traefik + cert-manager (Let's Encrypt) · GitHub Actions → GHCR ·
 Prometheus, Grafana, Loki · Amazon S3 for backups, with the bucket made by Terraform.
