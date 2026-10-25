@@ -21,15 +21,18 @@ Relay sits in the middle:
 
 | Service | Address | Status |
 |---|---|---|
-| API | https://api.myrelay.tech | In progress |
-| Dashboard (static files) | https://cdn.myrelay.tech | Planned |
-| Metrics and logs | https://grafana.myrelay.tech | Planned |
+| API | https://api.myrelay.tech | In progress (test app live with HTTPS) |
+| Relay dashboard (static files) | https://cdn.myrelay.tech | Planned |
+| Ops dashboard: metrics and logs (Grafana) | https://grafana.myrelay.tech | Planned |
 
 ## Stack
 
-Bun + TypeScript · PostgreSQL (also the job queue, via `SKIP LOCKED`) · k3s on our own VPS ·
-Traefik + cert-manager (Let's Encrypt) · GitHub Actions → GHCR · Prometheus, Grafana, Loki ·
-Terraform for the backup bucket and cluster add-ons.
+Bun 1.4 + TypeScript + Fastify · React + Vite + Tailwind dashboard ·
+PostgreSQL 18 (also the job queue, via `SKIP LOCKED`) ·
+k3s on our own VPS · Traefik + cert-manager (Let's Encrypt) · GitHub Actions → GHCR ·
+Prometheus, Grafana, Loki · Amazon S3 for backups, with the bucket made by Terraform.
+
+Why we chose what we chose: [`docs/decisions/`](docs/decisions/).
 
 ## Team
 
