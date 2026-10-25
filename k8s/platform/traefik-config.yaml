@@ -1,0 +1,19 @@
+# Redirect every plain-HTTP request (port 80) to HTTPS (port 443), for all hosts.
+# k3s installs Traefik with Helm; a HelmChartConfig adds our values on top of k3s's defaults.
+# allowACMEByPass keeps /.well-known/acme-challenge/ on plain HTTP, so Let's Encrypt checks reach cert-manager.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik            # must match k3s's built-in Traefik chart
+  namespace: kube-system   # where k3s runs Traefik
+spec:
+  valuesContent: |-
+    ports:
+      web:                       # the port-80 entrypoint
+        allowACMEByPass: true    # the redirect skips the Let's Encrypt check path
+        http:
+          redirections:
+            entryPoint:
+              to: websecure      # the port-443 entrypoint
+              scheme: https
+              permanent: true    # tells clients "always use HTTPS from now on"
