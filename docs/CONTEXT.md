@@ -94,7 +94,7 @@ backup storage (R2, B2 or AWS), final retry schedule, Grafana address.
   Log in with `ssh relay` (alias in each person's `~/.ssh/config`). `administrator` is
   one.com's default account, kept as a backup.
 - **Firewalls:** one.com's network firewall + ufw. ufw allows 22, 80, 443 and the k3s networks
-  10.42.0.0/16 and 10.43.0.0/16. Ports 80/443 are still closed in one.com's panel (step 0.12).
+  10.42.0.0/16 and 10.43.0.0/16. one.com's firewall allows 22, 80 and 443.
 - **kubectl:** only on the server (`ssh relay`, then `kubectl …`). Port 6443 stays closed.
 - **Domain:** `myrelay.tech`, DNS at get.tech. `api.myrelay.tech` has an A record to the VPS.
   **No AAAA records**: the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
@@ -111,5 +111,6 @@ backup storage (R2, B2 or AWS), final retry schedule, Grafana address.
 
 ## Where we are
 
-Phase 0 (server foundation): VPS hardened, k3s and cert-manager installed, repo created.
-Next: Let's Encrypt issuers, open 80/443 at one.com, hello world on https://api.myrelay.tech.
+Phase 0 (server foundation) is done: VPS hardened, k3s, cert-manager with Let's Encrypt
+issuers, and a temporary hello-world app on https://api.myrelay.tech with a trusted
+certificate. Next: Phase 1, the API skeleton (Bun) with tests.
