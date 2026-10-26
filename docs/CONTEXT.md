@@ -85,6 +85,8 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `/metrics` on port 9090 only. Errors: `{"error":{"code","message","request_id"}}`. Another
 owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech` only.
 Owners and API keys are created with a `create-owner` script (no signup page).
+**The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
+Both the API and the dashboard follow it; changes to it go through a PR first.
 
 ## Stack and decisions
 
