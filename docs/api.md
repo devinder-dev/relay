@@ -154,7 +154,7 @@ Deleted endpoints aren't listed at all.
 | Route | Answer |
 |---|---|
 | `GET /health/live` | 200 `{ "status": "ok" }`. Never checks the database |
-| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down or when the database is unreachable |
+| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down or when the database is unreachable. The shutdown 503 comes from Fastify: after `app.close()` every new request gets 503, and a pod that has stopped listening refuses the connection, which also counts as not ready |
 | `GET /version` | 200 `{ "sha": "<git commit>" }` |
 
 ### `GET /v1/me`
