@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+
+/* The palette and the two fonts come straight from docs/design/relay-wireframe.html,
+   so the built app and the sketch stay the same thing. Plain CSS variables rather
+   than Tailwind theme tokens, because they have to swap on the dark-mode query. */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --paper: #f6f8fa;
+  --ink: #1f2328;
+  --ink-dim: #59636e;
+  --ink-faint: #8c959f;
+  --card: #ffffff;
+  --line: #afb8c1;
+  --line-soft: #d0d7de;
+  --accent: #2f6feb;
+  --accent-soft: #eaf2ff;
+  --ok: #1a7f37;
+  --ok-bg: #dafbe1;
+  --warn: #9a6700;
+  --warn-bg: #fff8c5;
+  --bad: #cf222e;
+  --bad-bg: #ffebe9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0d1117;
+    --ink: #e6edf3;
+    --ink-dim: #9198a1;
+    --ink-faint: #6e7681;
+    --card: #161b22;
+    --line: #3d444d;
+    --line-soft: #21262d;
+    --accent: #4493f8;
+    --accent-soft: #11253d;
+    --ok: #3fb950;
+    --ok-bg: #122117;
+    --warn: #d29922;
+    --warn-bg: #2b2111;
+    --bad: #f85149;
+    --bad-bg: #2d1214;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+.mono {
+  font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
