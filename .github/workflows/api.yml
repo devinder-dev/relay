@@ -1,0 +1,67 @@
+# The API pipeline.
+#   Every pull request: test the API and check that its image builds (nothing is pushed).
+#   Every merge to main that touches the API: test again, then build and push the image
+#   to GHCR, tagged with the commit. Deployment comes later (step 1.8).
+name: api
+
+on:
+  pull_request:
+    # No path filter here on purpose: "api-test" is a required check, and a required
+    # check that never runs (for example on a dashboard-only PR) would block the merge forever.
+  push:
+    branches: [main]
+    paths: ["api/**", ".github/workflows/api.yml"]
+
+# By default no job may write anything. Jobs ask for more only where they need it.
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels the older, now pointless run. Runs on main always finish.
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: api-test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      # Actions are pinned to a full commit SHA, so a moved or hijacked tag can't run new code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: api/.bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  image:
+    name: api-image
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # only this job may push to GHCR, and it only pushes on main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and on main, push) the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          platforms: linux/amd64 # the VPS is amd64; GitHub's runners build that natively
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
+          push: ${{ github.event_name == 'push' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
