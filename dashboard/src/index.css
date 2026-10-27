@@ -1,10 +1,12 @@
 @import 'tailwindcss';
 
-/* The palette and the two fonts come straight from docs/design/relay-wireframe.html,
-   so the built app and the sketch stay the same thing. Plain CSS variables rather
-   than Tailwind theme tokens, because they have to swap on the dark-mode query. */
+/* The palette comes straight from docs/design/relay-wireframe.html, so the built app
+   and the sketch stay the same thing. Plain CSS variables rather than Tailwind theme
+   tokens, because they have to swap on the dark-mode query.
 
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+   The two fonts are loaded from index.html, not here: Tailwind's @import above expands
+   into this file, so anything imported after it is no longer at the start of the
+   stylesheet and gets dropped from the production build. */
 
 :root {
   --paper: #f6f8fa;

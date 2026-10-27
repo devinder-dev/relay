@@ -4,8 +4,16 @@ import StatusPill from '../components/StatusPill'
 import { deliveryDetail, pendingDeliveryDetail, replayResponse } from '../mocks'
 import type { DeliveryDetail as Detail } from '../types'
 
-// Stands in for GET /v1/deliveries/:id until the API exists.
+// Stands in for the server's memory. A real API writes the replay to the database
+// and hands back the new state on the next GET; these fixtures are frozen, so this
+// holds what replay changed. It goes away in phase 5.3, when src/api.ts takes over
+// and the server remembers instead.
+let replayed: Detail | null = null
+
+// Stands in for GET /v1/deliveries/:id until the API exists. A replayed delivery
+// wins over the fixture it came from, or the 2 s reload would hand back the old row.
 function load(id: string | undefined): Detail | null {
+  if (replayed?.id === id) return replayed
   if (id === pendingDeliveryDetail.id) return pendingDeliveryDetail
   if (id === deliveryDetail.id) return deliveryDetail
   return null
@@ -58,14 +66,18 @@ export default function DeliveryDetail() {
   // Replay answers with a Delivery, not a DeliveryDetail, so take only the four
   // fields it changes. Spreading the whole answer would replace `event` with the
   // short version and lose the payload.
+  //
+  // The result is written twice on purpose: to `replayed` so the reload finds it,
+  // and to state so the screen updates now. ADR 0002: "Replay triggers one reload."
   function replay() {
-    setDelivery({
+    replayed = {
       ...delivery!,
       status: replayResponse.status,
       attempts: replayResponse.attempts,
       next_attempt_at: replayResponse.next_attempt_at,
       last_error: replayResponse.last_error,
-    })
+    }
+    setDelivery(replayed)
   }
 
   return (
