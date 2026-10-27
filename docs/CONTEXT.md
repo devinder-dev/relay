@@ -126,6 +126,10 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
 - **Firewalls:** one.com's network firewall + ufw. ufw allows 22, 80, 443 and the k3s networks
   10.42.0.0/16 and 10.43.0.0/16. one.com's firewall allows 22, 80 and 443.
 - **kubectl:** only on the server (`ssh relay`, then `kubectl …`). Port 6443 stays closed.
+- **Deploy path:** GitHub Actions (environment `production`, main only) logs in as the Linux
+  user `deploy`, whose key can only start `/usr/local/bin/relay-deploy`. The script deploys a
+  commit only if it is on main, using the Kubernetes account `deployer` (namespace `relay`
+  only, no Secrets). Which folder is applied how: [`k8s/README.md`](../k8s/README.md).
 - **Domain:** `myrelay.tech`, DNS at get.tech. A records for `api`, `cdn` (the Relay dashboard)
   and `grafana` (the ops dashboard: metrics and logs) all point to the VPS. **No AAAA records**:
   the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
@@ -148,9 +152,12 @@ Phase 0 (server foundation) is done: VPS hardened, k3s, cert-manager with Let's 
 issuers, and a temporary hello-world app on https://api.myrelay.tech with a trusted
 certificate.
 
-Phase 1 (walking skeleton) has started: HTTP → HTTPS redirect (1.1) and DNS for cdn and
-grafana (1.2) are done. Next: 1.3, the API skeleton in `api/` (Bun 1.4.4 + Fastify) with
-`/health/live`, `/health/ready`, `/version` and the first `bun test`.
+Phase 1 (walking skeleton) is well under way. Done: HTTP → HTTPS redirect (1.1), DNS for cdn
+and grafana (1.2), the API skeleton in `api/` with its Docker image (1.3–1.4, PR #11), the CI
+pipeline that tests every PR and pushes the image from main (1.5, PR #12), and the deploy path
+(1.6): a `deploy` user whose key can only run `relay-deploy`, and a `deployer` account limited
+to namespace `relay`. Next: 1.7, the API manifests in `k8s/app/`, then 1.8, the first deploy
+through the pipeline.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
