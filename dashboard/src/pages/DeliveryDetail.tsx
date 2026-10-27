@@ -6,14 +6,16 @@ import type { DeliveryDetail as Detail } from '../types'
 
 // Stands in for the server's memory. A real API writes the replay to the database
 // and hands back the new state on the next GET; these fixtures are frozen, so this
-// holds what replay changed. It goes away in phase 5.3, when src/api.ts takes over
-// and the server remembers instead.
-let replayed: Detail | null = null
+// holds what replay changed. Keyed by id, because replaying one delivery must not
+// make the screen forget another. It goes away in phase 5.3, when src/api.ts takes
+// over and the server remembers instead.
+const replayed = new Map<string, Detail>()
 
 // Stands in for GET /v1/deliveries/:id until the API exists. A replayed delivery
 // wins over the fixture it came from, or the 2 s reload would hand back the old row.
 function load(id: string | undefined): Detail | null {
-  if (replayed?.id === id) return replayed
+  const fromReplay = id ? replayed.get(id) : undefined
+  if (fromReplay) return fromReplay
   if (id === pendingDeliveryDetail.id) return pendingDeliveryDetail
   if (id === deliveryDetail.id) return deliveryDetail
   return null
@@ -70,14 +72,15 @@ export default function DeliveryDetail() {
   // The result is written twice on purpose: to `replayed` so the reload finds it,
   // and to state so the screen updates now. ADR 0002: "Replay triggers one reload."
   function replay() {
-    replayed = {
+    const next: Detail = {
       ...delivery!,
       status: replayResponse.status,
       attempts: replayResponse.attempts,
       next_attempt_at: replayResponse.next_attempt_at,
       last_error: replayResponse.last_error,
     }
-    setDelivery(replayed)
+    replayed.set(next.id, next)
+    setDelivery(next)
   }
 
   return (
