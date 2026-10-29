@@ -71,9 +71,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  deploy-script:
+    name: deploy-script-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # relay-deploy guards production, so its gates and rollback are tested on every PR,
+      # with fake git and kubectl (no server needed). shellcheck ships on GitHub's runner.
+      - name: Test relay-deploy's decisions
+        run: bash infra/server/test-relay-deploy.sh infra/server/relay-deploy.sh
+      - name: Lint the server scripts
+        run: shellcheck infra/server/*.sh
+
   deploy:
     name: deploy
-    needs: image
+    needs: [image, deploy-script] # a broken deploy script never reaches the server
     if: github.event_name == 'push' # only after a merge to main, never on a PR
     runs-on: ubuntu-24.04
     # The environment hands over DEPLOY_SSH_KEY, and only to workflows running on main.
@@ -81,8 +94,8 @@ jobs:
       name: production
       url: https://api.myrelay.tech
     permissions: {} # needs no GitHub access at all: it only talks to our server
-    # Worst case: 5 min waiting for the server's lock + 3 min rollout + 3 min rollback.
-    timeout-minutes: 20
+    # Worst case: 15 min waiting for the server's lock + 6 min rollout + 6 min rollback.
+    timeout-minutes: 30
     steps:
       - name: Deploy the commit over SSH
         # Values arrive as environment variables, never pasted into the command itself.
