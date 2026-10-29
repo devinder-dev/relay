@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # The server's own firewall, ufw (step 0.7). one.com's network firewall sits in front of it
-# and is set in their web panel (TCP 22, 80, 443): two layers, so one mistake exposes nothing.
+# and is set in their web panel: exactly IPv4 TCP 22, 80 and 443, no "All" rule, nothing for
+# IPv6. Two layers, so one mistake exposes nothing.
+#
+# Limit: ufw can't filter ports that Kubernetes publishes itself (NodePorts such as Traefik's
+# 30795/32338, and hostPorts). Kubernetes redirects that traffic before ufw's rules see it,
+# so for those ports one.com's firewall is the only layer.
 #
 # Run on the VPS:  sudo bash firewall.sh
 # Safe to run again: ufw skips rules it already has.

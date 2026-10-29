@@ -10,8 +10,12 @@ run alone, never inside a pasted block.
 
 ## 1. Outside the server (web panels)
 
-- **one.com:** a VPS with Ubuntu 26.04 (4 vCPU, 8 GB). Two-step login on the account. Network
-  firewall: allow TCP 22, 80 and 443.
+- **one.com:** a VPS with Ubuntu 26.04 (4 vCPU, 8 GB). Two-step login on the account.
+- **one.com network firewall:** exactly three rules, IPv4 TCP 22, 80 and 443. No `All` rule
+  and nothing for IPv6. ufw can't filter ports that Kubernetes publishes (NodePorts), so this
+  firewall is the only thing blocking them. When changing rules, add the new one before
+  deleting an old one, so SSH never drops. Check from outside: `nc -z -G 3 <vps-ip> 30795`
+  must fail, and 22, 80, 443 must answer.
 - **get.tech DNS:** A records `api`, `cdn` and `grafana` → the VPS's IPv4 address. No AAAA
   records: the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
 
@@ -42,6 +46,24 @@ run alone, never inside a pasted block.
    `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS` (the server's new host key).
 3. Merge anything to `main` (or re-run the last pipeline): the app deploys itself.
 
-## 5. Data (Phase 6)
+## 5. GitHub settings (not in git; made with `gh`, stored by GitHub)
+
+- Ruleset `protect-main`: PR + 1 approval, approval after the last push, no force-push, no
+  deletion. Squash merges only. Required check `api-test`.
+- Environment `production`: only `main` may use it. Secret `DEPLOY_SSH_KEY`, variables
+  `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`.
+- GHCR package `relay-api`: public, so the cluster pulls it without a password.
+
+## 6. Data (Phase 6)
 
 Restore the newest database dump from S3. Until then, a lost server means lost data.
+
+k3s's own data (the cluster state) isn't backed up on purpose: everything in it is rebuilt
+from git and these scripts. Only the database holds data that can't be rebuilt.
+
+## Reboots
+
+`unattended-upgrades` installs security updates every day but never reboots by itself
+(`Automatic-Reboot` stays off, so a demo is never interrupted). After a kernel update
+(`/var/run/reboot-required` exists), reboot by hand at a quiet time, never in the week of the
+defense, and check that `/version` answers again afterwards.
