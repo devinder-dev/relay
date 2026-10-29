@@ -5,13 +5,16 @@
 // dashboard lie about the API: change docs/api.md first, in its own PR.
 
 export type DeliveryStatus = 'pending' | 'delivered' | 'dead';
-export type EndpointStatus = 'active' | 'failing' | 'disabled';
+export type EndpointStatus = 'active' | 'failing';
 export type AttemptError =
   | 'timeout'
   | 'connect_failed'
   | 'blocked_address'
   | 'redirect'
   | 'tls';
+// A delivery can also end for a reason no single try caused: its endpoint was
+// deleted while it was still pending.
+export type DeliveryError = AttemptError | 'endpoint_deleted';
 
 export interface Owner {
   id: string;
@@ -29,7 +32,8 @@ export interface Endpoint {
   name: string;
   url: string;
   event_types: string[]; // ["*"] means every event type
-  status: EndpointStatus; // worked out when read, from the latest delivery
+  status: EndpointStatus; // worked out when read: failing if the latest delivery is
+  // dead, or pending after a failed try; otherwise active. Deleted ones aren't listed.
   created_at: string;
 }
 
@@ -45,7 +49,7 @@ export interface Delivery {
   attempts: number; // tries in the current cycle (the retry budget); replay resets it to 0
   next_attempt_at: string | null; // when the next try is due; null unless status is "pending"
   last_status_code: number | null; // HTTP status of the last try; null if the receiver never answered
-  last_error: AttemptError | null; // why the last try failed without a status code; null otherwise
+  last_error: DeliveryError | null; // why the last try failed without a status code; null otherwise
   delivered_at: string | null; // set only when status is "delivered"
   created_at: string;
   event: { id: string; type: string };

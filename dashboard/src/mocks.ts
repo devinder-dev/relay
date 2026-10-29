@@ -26,7 +26,8 @@ export const me: Me = {
 // GET /v1/endpoints
 //
 // `status` is derived from each endpoint's latest delivery, so it matches the
-// deliveries below: Slack's latest went through, n8n's is pending after a failed try.
+// deliveries below: Slack's latest went through, n8n's is pending after a failed
+// try, and Legacy billing has no deliveries at all.
 
 const slack = {
   id: '0199c4f8-8a01-7d33-b2c7-5e9f1a4d7b20',
@@ -63,7 +64,7 @@ export const endpoints: { data: Endpoint[] } = {
     {
       ...billing,
       event_types: ['invoice.paid'],
-      status: 'disabled',
+      status: 'active', // no deliveries yet, and the rule's fallback is active
       created_at: '2026-10-19T11:02:17.000Z',
     },
   ],
