@@ -79,7 +79,7 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 (delivery_id, started_at, duration_ms, status_code, error, response_excerpt).
 
 **API v1:** `GET /v1/me` · `POST /v1/endpoints` (returns the signing secret once) ·
-`GET /v1/endpoints` · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
+`GET /v1/endpoints` · `DELETE /v1/endpoints/:id` (soft delete) · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
 `GET /health/ready` (checks DB, 503 while shutting down) · `GET /version` (git SHA) ·
 `/metrics` on port 9090 only. Errors: `{"error":{"code","message","request_id"}}`. Another

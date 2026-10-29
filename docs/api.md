@@ -16,7 +16,7 @@ that changes this file, approved by both of us, before or together with the code
 | Times | ISO 8601 in UTC, e.g. `2026-10-25T14:03:21.512Z` |
 | Request id | Every response has an `X-Request-Id` header, the same id as in our logs and in error bodies |
 | Other owners' data | Answered with **404**, never 403, so nobody can probe which ids exist |
-| CORS | Browsers may call the API only from `https://cdn.myrelay.tech` (and localhost in CI) |
+| CORS | Browsers may call the API only from `https://cdn.myrelay.tech`, and from `http://localhost:4173` (the preview server Playwright uses in CI). Local development uses a proxy instead, see "Local development" below |
 
 ### Errors
 
@@ -40,6 +40,8 @@ A 422 also has `details`, one entry per problem:
 | 404 | `not_found` | Unknown route, or an id that doesn't exist or isn't yours |
 | 409 | `already_delivered` | Replay of a delivery that is already delivered |
 | 409 | `in_flight` | Replay of a delivery a worker is sending right now |
+| 409 | `endpoint_deleted` | Replay of a delivery whose endpoint was deleted |
+| 409 | `endpoint_limit_reached` | Creating an endpoint when the owner already has 20 |
 | 413 | `payload_too_large` | Body over 256 KiB |
 | 415 | `unsupported_media_type` | Body that isn't JSON |
 | 422 | `validation_failed` | Body or query fails the rules below (`details` lists why) |
@@ -58,8 +60,9 @@ The dashboard can copy these into `src/types.ts`. The API's responses must match
 
 ```ts
 export type DeliveryStatus = "pending" | "delivered" | "dead";
-export type EndpointStatus = "active" | "failing" | "disabled";
+export type EndpointStatus = "active" | "failing";
 export type AttemptError = "timeout" | "connect_failed" | "blocked_address" | "redirect" | "tls";
+export type DeliveryError = AttemptError | "endpoint_deleted";   // a delivery can also end because its endpoint was deleted
 
 export interface Owner { id: string; name: string }
 
@@ -90,7 +93,7 @@ export interface Delivery {
   attempts: number;                     // tries in the current cycle (the retry budget); replay resets it to 0
   next_attempt_at: string | null;       // when the next try is due; null unless status is "pending"
   last_status_code: number | null;      // HTTP status of the last try; null if the receiver never answered
-  last_error: AttemptError | null;      // why the last try failed without a status code; null otherwise
+  last_error: DeliveryError | null;     // why the last try failed without a status code; null otherwise
   delivered_at: string | null;          // set only when status is "delivered"
   created_at: string;
   event: { id: string; type: string };
@@ -141,8 +144,8 @@ ever made, numbered, never deleted. After a replay of a dead delivery, `attempts
 `attempt_log` still has its 8 old rows; the next try becomes number 9.
 
 **Endpoint `status`** is worked out when the list is read, from the endpoint's latest delivery:
-`disabled` if the endpoint is disabled, `failing` if its latest delivery is `dead` or is `pending`
-after a failed try, otherwise `active`.
+`failing` if its latest delivery is `dead`, or is `pending` after a failed try; otherwise `active`.
+Deleted endpoints aren't listed at all.
 
 ## Routes
 
@@ -151,7 +154,7 @@ after a failed try, otherwise `active`.
 | Route | Answer |
 |---|---|
 | `GET /health/live` | 200 `{ "status": "ok" }`. Never checks the database |
-| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down or when the database is unreachable |
+| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down or when the database is unreachable. The shutdown 503 comes from Fastify: after `app.close()` every new request gets 503, and a pod that has stopped listening refuses the connection, which also counts as not ready |
 | `GET /version` | 200 `{ "sha": "<git commit>" }` |
 
 ### `GET /v1/me`
@@ -168,11 +171,20 @@ Body:
 | `url` | `https` URL, at most 2048 characters, must resolve only to public addresses |
 | `event_types` | optional, 1–20 strings, each an exact event type or `"*"`; default `["*"]` |
 
-201 → `EndpointCreated` (with `signing_secret`, shown only here). Errors: 401, 422 `validation_failed`, 422 `invalid_endpoint_url`.
+201 → `EndpointCreated` (with `signing_secret`, shown only here). An owner can have at most 20
+endpoints at a time; deleted ones don't count.
+Errors: 401, 409 `endpoint_limit_reached`, 422 `validation_failed`, 422 `invalid_endpoint_url`.
 
 ### `GET /v1/endpoints`
 
-200 → `{ "data": Endpoint[] }`. At most 20 endpoints per owner, so no paging. Errors: 401.
+200 → `{ "data": Endpoint[] }`, the owner's endpoints that aren't deleted. At most 20, so no paging. Errors: 401.
+
+### `DELETE /v1/endpoints/:id`
+
+204, no body. A **soft delete**: the endpoint disappears from `GET /v1/endpoints` and frees its slot,
+but stays in the database, so its old deliveries keep showing its name and URL. Deliveries still
+pending for it are not sent anymore: they become `dead` with `last_error: "endpoint_deleted"`.
+Deleting it again answers 404. Errors: 401, 404.
 
 ### `POST /v1/events`
 
@@ -202,11 +214,16 @@ Query: `status` (optional, a `DeliveryStatus`), `endpoint_id` (optional), `limit
 
 ### `POST /v1/deliveries/:id/replay`
 
-Allowed when the delivery is `dead`, or `pending` and not being sent right now ("retry now").
+Allowed when the delivery is `dead`, or `pending` and not being sent right now ("retry now"),
+and its endpoint isn't deleted.
 
 202 → `Delivery` as it is after the replay: `status: "pending"`, `attempts: 0`,
 `next_attempt_at` ≈ now, `last_error: null`. The dashboard then reloads the detail screen.
-Errors: 401, 404, 409 `already_delivered`, 409 `in_flight`.
+Errors: 401, 404, 409 `already_delivered`, 409 `in_flight`, 409 `endpoint_deleted`.
+
+The dashboard can't know in advance that a worker is sending the delivery right now (that window is
+a few seconds at most), so the Replay button simply tries. On 409 `in_flight` it says the delivery is
+being sent right now and to try again in a moment.
 
 ## Example: one row of `GET /v1/deliveries`
 
@@ -225,6 +242,27 @@ Errors: 401, 404, 409 `already_delivered`, 409 `in_flight`.
 }
 ```
 
+## Local development (dashboard)
+
+The real API only accepts browser calls from the origins above, so `localhost:5173` can't call it
+directly. Instead, the Vite dev server forwards API calls for us. The browser only ever talks to
+`localhost:5173`, so CORS never applies:
+
+```ts
+// dashboard/vite.config.ts
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: {
+    proxy: {
+      "/v1": { target: "https://api.myrelay.tech", changeOrigin: true },
+    },
+  },
+});
+```
+
+In development `VITE_API_URL` is empty, so axios calls relative paths like `/v1/deliveries`. In the
+production build it is `https://api.myrelay.tech`.
+
 ## Not in v1 (later)
 
-`DELETE /v1/endpoints/:id`, per-owner stats, signing-secret rotation, a circuit breaker per endpoint.
+Editing an endpoint, per-owner stats, signing-secret rotation, a circuit breaker per endpoint.
