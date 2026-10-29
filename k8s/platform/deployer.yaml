@@ -1,0 +1,63 @@
+# The deploy path's Kubernetes side (step 1.6a).
+# The pipeline's deploy script runs as the ServiceAccount "deployer". It may update the app
+# inside the "relay" namespace and nothing else: no Secrets, no database, no other namespaces.
+# Applied by hand by one of us (platform files are never applied by the pipeline).
+
+# The folder our app lives in, apart from system parts like kube-system and cert-manager.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: relay
+---
+# An identity for a program (the deploy script), not for a person.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deployer
+  namespace: relay
+---
+# What "deployer" may do, only inside the "relay" namespace.
+# Just what steps 1.7–1.8 need. Later phases add rules when they need them:
+# jobs (migrations, phase 2), networkpolicies (phase 4), horizontalpodautoscalers (phase 8).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: relay
+rules:
+  # Create and update the app's Deployments: kubectl apply needs get + create + patch.
+  # No "delete": a deploy replaces things, it never removes them.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Read-only: "kubectl rollout status" and "rollout undo" look at the ReplicaSets
+  # (one per version) and the pods to follow and reverse a rollout.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # The stable name in front of the pods, and the app's non-secret settings.
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The route from api.myrelay.tech to the Service.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+# Gives the Role above to the ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployer
+  namespace: relay
+subjects:
+  - kind: ServiceAccount
+    name: deployer
+    namespace: relay
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deployer
