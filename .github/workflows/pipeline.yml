@@ -94,8 +94,10 @@ jobs:
       name: production
       url: https://api.myrelay.tech
     permissions: {} # needs no GitHub access at all: it only talks to our server
-    # Worst case: 15 min waiting for the server's lock + 6 min rollout + 6 min rollback.
-    timeout-minutes: 30
+    # Budget for two Deployments: 15 min lock + 6 min rollout + 9 min public check = 30 min.
+    # Failure path: 15 min lock + 6 min rollout + 6 min rollback = 27 min; no public check.
+    # Allow 5 extra minutes above the longer path for SSH, git, kubectl and job overhead.
+    timeout-minutes: 35
     steps:
       - name: Deploy the commit over SSH
         # Values arrive as environment variables, never pasted into the command itself.
@@ -119,7 +121,8 @@ jobs:
         # relay-deploy already waited for ready pods inside the cluster. This checks the whole
         # public path a customer uses (DNS, certificate, Traefik, Service, pod) from outside.
         # An old pod can still answer for a few seconds after the rollout, and the first deploy
-        # also waits for a brand-new certificate, so we ask for up to 36 × 5 s ≈ 3 minutes.
+        # also waits for a brand-new certificate. Budget up to 36 × (10 s curl + 5 s sleep)
+        # = 9 minutes for retries, plus command overhead.
         shell: bash # GitHub then adds -e and pipefail, so a failed curl isn't hidden behind jq
         run: |
           for attempt in $(seq 1 36); do
