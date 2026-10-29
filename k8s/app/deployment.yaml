@@ -28,6 +28,8 @@ spec:
       labels:
         app.kubernetes.io/name: relay-api # ...and give every new pod this label
     spec:
+      # The API never talks to Kubernetes, so its pods get no ServiceAccount token at all.
+      automountServiceAccountToken: false
       # Run as the image's "bun" user. Kubernetes can only check that a user isn't root
       # when it gets a number, so the uid is written out (1000, seen in step 1.4).
       securityContext:
@@ -66,7 +68,8 @@ spec:
                 seconds: 5
           # requests = guaranteed (the HPA calculates its % from cpu later).
           # limits = the ceiling: above 256 MiB of memory the container is restarted.
-          # The 1.3 load test peaked at 93 MB.
+          # The 1.3 load test peaked at 93 MB. No CPU limit on purpose: it would slow the API
+          # down even when the server has CPU to spare; the request is what scheduling uses.
           resources:
             requests:
               cpu: 100m
@@ -75,5 +78,6 @@ spec:
               memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true  # nothing in the image can be changed at runtime
             capabilities:
               drop: ["ALL"]
