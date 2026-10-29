@@ -1,0 +1,6 @@
+# k3s settings (step 0.8). Installed as /etc/rancher/k3s/config.yaml BEFORE installing k3s,
+# so the setting is there from the first start.
+# Encrypts Kubernetes Secrets at rest. By default they're only base64, which anyone who can
+# read the disk can decode. Limit: the key is on the same disk, so a copy of the whole disk
+# can still decrypt them.
+secrets-encryption: true
