@@ -5,7 +5,7 @@ How each folder gets onto the cluster, and who may apply it.
 | Folder | What's in it | Applied by |
 |---|---|---|
 | `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace and the `deployer` account | One of us, by hand, after the PR is reviewed |
-| `k8s/app/` (from step 1.7) | Our app in namespace `relay`: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
+| `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
 | `k8s/hello/` | The temporary hello-world test app | By hand. Removed when the API takes over in step 1.7 |
 
 ## Rules
@@ -15,9 +15,14 @@ How each folder gets onto the cluster, and who may apply it.
 - **`k8s/app/` holds only what the `deployer` account may change:** Deployments, Services,
   Ingresses and ConfigMaps. A Namespace or a Secret there would make the deploy fail with
   "forbidden".
-- **Images in `k8s/app/` use the tag `__GIT_SHA__`.** `relay-deploy` replaces it with the
-  commit it deploys, so manifests and image always come from the same commit. Don't apply
-  these files by hand: the tag would be wrong.
+- **Images in `k8s/app/` use the tag `__GIT_SHA__`** (`relay-api` and `relay-dashboard`
+  alike). `relay-deploy` replaces it with the commit it deploys, so manifests and images
+  always come from the same commit. That's why every merge to main builds every image, even
+  the ones that didn't change: the tag must exist for each commit. Don't apply these files
+  by hand: the tag would be wrong.
+- **Removing a file from `k8s/app/` doesn't remove it from the cluster.** The `deployer`
+  account has no delete, so one of us deletes the resource by hand:
+  `kubectl -n relay delete <kind>/<name>`.
 - **No Secrets in git.** They are created on the server with `kubectl create secret`.
 - **Git and the cluster must match.** Everything applied by hand is committed in the same PR.
 
@@ -42,12 +47,20 @@ VPS    Linux user "deploy": its key may only start /usr/local/bin/relay-deploy
                         │
        relay-deploy:  <sha> must be 40 hex characters and part of main's history,
                       then check out that commit, apply k8s/app/ with the tag,
-                      wait for the rollout, or undo it if it fails
+                      and wait until every Deployment is ready.
+                      If one isn't: deploy the last good commit again.
                         │ every kubectl call uses the "deployer" account:
                         │ namespace relay only, no Secrets
                         ▼
-       Deployment relay-api runs the new pods
+       the Deployments (API, dashboard) run the new pods
 ```
+
+**Rollback.** After every successful deploy, `relay-deploy` writes the commit to
+`/home/deploy/.relay-last-good`. If a later rollout fails, it deploys that commit again the
+same way, so manifests and images go back together. `kubectl rollout undo` would only
+revert the pods' image and leave the failed commit's ConfigMaps and Ingresses behind. The
+job still turns red after a rollback, because the commit we asked for isn't live. Limit:
+a resource that only the failed commit *added* stays, because there's no delete.
 
 The server-side parts live in `infra/server/` and are installed by hand, by an admin:
 
