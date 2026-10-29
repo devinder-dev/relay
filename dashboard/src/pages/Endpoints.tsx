@@ -6,6 +6,37 @@ import type { Endpoint, EndpointCreated } from '../types'
 const field =
   'mono w-full rounded-md border border-[var(--line-soft)] bg-[var(--paper)] px-3 py-1.5 text-sm text-[var(--ink)] placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)] focus:outline-none'
 
+// Loopback, the three private IPv4 ranges, link-local, and IPv6 loopback. The API
+// does the real check: it resolves the name first, because a public name can still
+// point at 127.0.0.1.
+const PRIVATE_HOST =
+  /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/i
+
+// What counts as an endpoint URL we are willing to POST to.
+//
+// This is a security rule, not a tidiness one. A worker runs inside the cluster,
+// so an endpoint pointing at a private address would have us fetch something the
+// customer could never reach from outside: the Kubernetes API, Postgres, /metrics.
+// That is SSRF, and the firewall cannot stop it, because the call comes from within.
+// The API rejects the same URLs with 422 invalid_endpoint_url; this check only
+// saves a round trip and gives a clearer message.
+function checkUrl(raw: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(raw.trim())
+  } catch {
+    return 'Enter a full URL, for example https://example.com/hooks/relay'
+  }
+
+  if (parsed.protocol !== 'https:') return 'The URL must start with https://'
+
+  const host = parsed.hostname
+  if (PRIVATE_HOST.test(host)) return 'The URL must not point at a private or internal address'
+  if (!host.includes('.') || host.endsWith('.')) return 'That host name does not look reachable'
+
+  return null
+}
+
 export default function Endpoints() {
   const [rows, setRows] = useState<Endpoint[]>(endpoints.data)
   const [name, setName] = useState('')
@@ -21,11 +52,18 @@ export default function Endpoints() {
     e.preventDefault()
 
     if (!name.trim()) return setError('Give the endpoint a name.')
-    if (!url.startsWith('https://')) return setError('The URL must start with https://')
+    const urlError = checkUrl(url)
+    if (urlError) return setError(urlError)
 
-    const created = { ...endpointCreated, name, url }
+    // The row and the secret are split on purpose. The API answers POST /v1/endpoints
+    // with the secret included, but the list it later returns never has one, so the
+    // row we add must look like a list row. Keeping `signing_secret` in `rows` would
+    // leave it in memory for the whole session, long after the box is dismissed.
+    const { signing_secret: _secret, ...row } = endpointCreated
+    const created = { ...row, id: crypto.randomUUID(), name: name.trim(), url: url.trim() }
+
     setRows([...rows, created])
-    setSecret(created)
+    setSecret({ ...created, signing_secret: endpointCreated.signing_secret })
     setName('')
     setUrl('')
     setError(null)
