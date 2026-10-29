@@ -72,6 +72,14 @@ export const endpoints: { data: Endpoint[] } = {
 
 // POST /v1/endpoints — the one answer that carries the signing secret.
 
+// Soft-deleted: gone from GET /v1/endpoints, but its old deliveries keep showing
+// its name and URL, so the detail screen still has something to render.
+const retiredCrm = {
+  id: '0199c4fa-9e21-7b45-8d72-3a6c0e5f1b88',
+  name: 'Old CRM',
+  url: 'https://example.com/hooks/crm',
+};
+
 export const endpointCreated: EndpointCreated = {
   id: '0199c51f-2b90-7c55-9d18-4a7e3f1b8c62',
   name: 'Ops webhook',
@@ -129,7 +137,11 @@ const recoveredDelivery: Delivery = {
   endpoint: { id: n8n.id, name: n8n.name },
 };
 
-/** Gave up after eight tries. The only row where Replay does anything. */
+/**
+ * Gave up after eight tries: the exhausted-budget example. Not the only row that
+ * can be replayed — the contract allows replaying a pending delivery to retry it
+ * now, and answers 409 `in_flight` only while a worker is sending it.
+ */
 const deadDelivery: Delivery = {
   id: '0199c51a-1f88-7b44-9c02-6d3e8f1a2b77',
   status: 'dead',
@@ -143,9 +155,34 @@ const deadDelivery: Delivery = {
   endpoint: { id: slack.id, name: slack.name },
 };
 
+/**
+ * Died because its endpoint was deleted while it was still waiting, not because a
+ * try failed. `last_error` carries a reason no attempt produced, which is why
+ * `DeliveryError` is wider than `AttemptError`. Note `attempt_log` is short: the
+ * delivery was dropped between tries, so there is no attempt row explaining it.
+ */
+const endpointDeletedDelivery: Delivery = {
+  id: '0199c5c0-7a33-7e12-b640-8d2f5a1c3e97',
+  status: 'dead',
+  attempts: 1,
+  next_attempt_at: null,
+  last_status_code: null,
+  last_error: 'endpoint_deleted',
+  delivered_at: null,
+  created_at: '2026-10-25T13:20:00.000Z',
+  event: { id: '0199c5c0-6b22-7d01-a53f-7c1e4b9d2f86', type: 'invoice.paid' },
+  endpoint: { id: retiredCrm.id, name: retiredCrm.name },
+};
+
 /** Newest first, by `created_at`. */
 export const deliveries: Page<Delivery> = {
-  data: [pendingDelivery, deliveredDelivery, recoveredDelivery, deadDelivery],
+  data: [
+    pendingDelivery,
+    deliveredDelivery,
+    recoveredDelivery,
+    endpointDeletedDelivery,
+    deadDelivery,
+  ],
   next_cursor: null,
 };
 
@@ -301,6 +338,33 @@ export const pendingDeliveryDetail: DeliveryDetail = {
   ],
 };
 
+/**
+ * The deleted-endpoint delivery, opened. The endpoint is not in `endpoints.data`
+ * any more, but it is still nested here, which is what lets the screen name where
+ * the event was going. One attempt, then the endpoint went away.
+ */
+export const endpointDeletedDetail: DeliveryDetail = {
+  ...endpointDeletedDelivery,
+  event: {
+    id: endpointDeletedDelivery.event.id,
+    type: 'invoice.paid',
+    payload: { invoice_id: 'INV-2026-0871', customer_id: 'cus_5Nm3Qx', amount: 1150.0, currency: 'SEK' },
+    created_at: '2026-10-25T13:20:00.000Z',
+  },
+  endpoint: retiredCrm,
+  attempt_log: [
+    {
+      id: '0199c5c0-8001-7f21-9a04-9e3f6b2d4c18',
+      number: 1,
+      started_at: '2026-10-25T13:20:00.000Z',
+      duration_ms: 10000,
+      status_code: null,
+      error: 'timeout',
+      response_excerpt: null,
+    },
+  ],
+};
+
 // Errors
 //
 // Every failing request answers with this shape. These three are the ones the
@@ -328,6 +392,38 @@ export const errorInFlight: ApiError = {
     code: 'in_flight',
     message: 'A worker is sending this delivery right now',
     request_id: '0199c5b5-9c34-7b62-be55-3a4f6c8d0e27',
+  },
+};
+
+export const errorEndpointDeleted: ApiError = {
+  error: {
+    code: 'endpoint_deleted',
+    message: 'The endpoint for this delivery has been deleted',
+    request_id: '0199c5b5-ad45-7c73-8f66-4b5a7d9e1f38',
+  },
+};
+
+// Owners get 20 endpoints. The 21st is refused, which the Add endpoint form has
+// to say out loud rather than just failing silently.
+export const errorEndpointLimitReached: ApiError = {
+  error: {
+    code: 'endpoint_limit_reached',
+    message: 'This account already has the maximum of 20 endpoints',
+    request_id: '0199c5b5-be56-7d84-9077-5c6b8e0f2a49',
+  },
+};
+
+// A 422 carries `details`, one entry per field that failed, so the form can put
+// each message next to the input it belongs to instead of in one lump.
+export const errorValidationFailed: ApiError = {
+  error: {
+    code: 'validation_failed',
+    message: 'The request body failed validation',
+    request_id: '0199c5b5-cf67-7e95-a188-6d7c9f1a3b50',
+    details: [
+      { path: 'url', message: 'must be an https URL that is not private or internal' },
+      { path: 'name', message: 'must be between 1 and 100 characters' },
+    ],
   },
 };
 
