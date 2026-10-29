@@ -8,7 +8,6 @@ const colours: Record<DeliveryStatus | EndpointStatus, string> = {
   pending: 'bg-[var(--warn-bg)] text-[var(--warn)]',
   failing: 'bg-[var(--warn-bg)] text-[var(--warn)]',
   dead: 'bg-[var(--bad-bg)] text-[var(--bad)]',
-  disabled: 'bg-[var(--paper)] text-[var(--ink-faint)]',
 }
 
 export default function StatusPill({ status }: { status: DeliveryStatus | EndpointStatus }) {
