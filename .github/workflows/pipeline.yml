@@ -1,0 +1,121 @@
+# The pipeline (steps 1.5 and 1.8).
+#   Every pull request: test the API and check that its image builds. Nothing is pushed or deployed.
+#   Every merge to main: test, build and push the image tagged with the commit, deploy that
+#   commit to the VPS, then check from outside that it's live.
+# Every merge is a release, so main has no path filter: a deploy needs an image tagged with
+# exactly the merged commit, even when only k8s/app/ or the docs changed.
+name: pipeline
+
+on:
+  pull_request:
+    # No path filter here on purpose: "api-test" is a required check, and a required
+    # check that never runs (for example on a dashboard-only PR) would block the merge forever.
+  push:
+    branches: [main]
+
+# By default no job may write anything. Jobs ask for more only where they need it.
+permissions:
+  contents: read
+
+# A newer push to the same PR cancels the older, now pointless run.
+# On main, runs queue up one at a time and never cancel a running deploy. If several merges
+# wait, only the newest runs: its commit already contains the others.
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: api-test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      # Actions are pinned to a full commit SHA, so a moved or hijacked tag can't run new code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: api/.bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+  image:
+    name: api-image
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # only this job may push to GHCR, and it only pushes on main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and on main, push) the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          platforms: linux/amd64 # the VPS is amd64; GitHub's runners build that natively
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
+          push: ${{ github.event_name == 'push' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: deploy
+    needs: image
+    if: github.event_name == 'push' # only after a merge to main, never on a PR
+    runs-on: ubuntu-24.04
+    # The environment hands over DEPLOY_SSH_KEY, and only to workflows running on main.
+    environment:
+      name: production
+      url: https://api.myrelay.tech
+    permissions: {} # needs no GitHub access at all: it only talks to our server
+    # Worst case: 5 min waiting for the server's lock + 3 min rollout + 3 min rollback.
+    timeout-minutes: 20
+    steps:
+      - name: Deploy the commit over SSH
+        # Values arrive as environment variables, never pasted into the command itself.
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Our server's ID card: SSH refuses any server that doesn't match it.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The server runs relay-deploy whatever we send, so we send only the commit.
+          # Its exit code becomes this step's: a failed or rolled-back deploy turns the job red.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes -o ConnectTimeout=20 \
+            "deploy@$DEPLOY_HOST" "$GITHUB_SHA"
+
+      - name: Check that the new version is live
+        # relay-deploy already waited for ready pods inside the cluster. This checks the whole
+        # public path a customer uses (DNS, certificate, Traefik, Service, pod) from outside.
+        # An old pod can still answer for a few seconds after the rollout, so we ask a few times.
+        shell: bash # GitHub then adds -e and pipefail, so a failed curl isn't hidden behind jq
+        run: |
+          for attempt in $(seq 1 12); do
+            # -f: an error answer (404, 503) counts as a failure. --max-time: never hang.
+            live=$(curl -fsS --max-time 10 https://api.myrelay.tech/version | jq -r .sha) \
+              || live="no answer"
+            echo "attempt $attempt: live is $live"
+            if [ "$live" = "$GITHUB_SHA" ]; then
+              echo "$GITHUB_SHA is live"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::api.myrelay.tech still doesn't run $GITHUB_SHA after 12 tries"
+          exit 1
