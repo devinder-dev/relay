@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import StatusPill from '../components/StatusPill'
-import { deliveryDetail, pendingDeliveryDetail, replayResponse } from '../mocks'
+import { clock } from '../format'
+import {
+  deliveredDeliveryDetail,
+  deliveryDetail,
+  pendingDeliveryDetail,
+  recoveredDeliveryDetail,
+  replayResponse,
+} from '../mocks'
 import type { DeliveryDetail as Detail } from '../types'
 
 // Stands in for the server's memory. A real API writes the replay to the database
@@ -11,22 +18,19 @@ import type { DeliveryDetail as Detail } from '../types'
 // over and the server remembers instead.
 const replayed = new Map<string, Detail>()
 
+// One fixture per row in the log, so every row in the log opens.
+const fixtures = [
+  pendingDeliveryDetail,
+  deliveryDetail,
+  deliveredDeliveryDetail,
+  recoveredDeliveryDetail,
+]
+
 // Stands in for GET /v1/deliveries/:id until the API exists. A replayed delivery
 // wins over the fixture it came from, or the 2 s reload would hand back the old row.
 function load(id: string | undefined): Detail | null {
-  const fromReplay = id ? replayed.get(id) : undefined
-  if (fromReplay) return fromReplay
-  if (id === pendingDeliveryDetail.id) return pendingDeliveryDetail
-  if (id === deliveryDetail.id) return deliveryDetail
-  return null
-}
-
-function clock(iso: string) {
-  return new Date(iso).toLocaleTimeString('sv-SE', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
+  if (!id) return null
+  return replayed.get(id) ?? fixtures.find((d) => d.id === id) ?? null
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -109,12 +113,12 @@ export default function DeliveryDetail() {
         <Row label="Endpoint">{delivery.endpoint.name}</Row>
         <Row label="Next attempt">
           <span className="mono">
-            {delivery.next_attempt_at ? clock(delivery.next_attempt_at) : '—'}
+            {delivery.next_attempt_at ? clock(delivery.next_attempt_at, true) : '—'}
           </span>
         </Row>
         <Row label="Delivered">
           <span className="mono">
-            {delivery.delivered_at ? clock(delivery.delivered_at) : '—'}
+            {delivery.delivered_at ? clock(delivery.delivered_at, true) : '—'}
           </span>
         </Row>
       </dl>
@@ -148,7 +152,7 @@ export default function DeliveryDetail() {
                   <td className="mono px-4 py-2 tabular-nums text-[var(--ink-dim)]">
                     {a.number}
                   </td>
-                  <td className="mono px-4 py-2 tabular-nums">{clock(a.started_at)}</td>
+                  <td className="mono px-4 py-2 tabular-nums">{clock(a.started_at, true)}</td>
                   <td className="mono px-4 py-2 text-right tabular-nums text-[var(--ink-dim)]">
                     {a.duration_ms} ms
                   </td>

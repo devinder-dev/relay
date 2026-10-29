@@ -1,21 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import StatusPill from '../components/StatusPill'
+import { clock } from '../format'
 import { deliveries } from '../mocks'
 import type { DeliveryStatus } from '../types'
 
 type Filter = DeliveryStatus | 'all'
 
 const filters: Filter[] = ['all', 'pending', 'delivered', 'dead']
-
-// Times are shown as clock time, not the full ISO string: the log is scanned for
-// "which row is mine", and the date is almost always today.
-function clock(iso: string) {
-  return new Date(iso).toLocaleTimeString('sv-SE', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 export default function DeliveryLog() {
   const [filter, setFilter] = useState<Filter>('all')

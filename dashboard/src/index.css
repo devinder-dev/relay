@@ -12,7 +12,7 @@
   --paper: #f6f8fa;
   --ink: #1f2328;
   --ink-dim: #59636e;
-  --ink-faint: #8c959f;
+  --ink-faint: #656d76; /* 5.25:1 on card, 4.93:1 on paper - WCAG AA */
   --card: #ffffff;
   --line: #afb8c1;
   --line-soft: #d0d7de;
@@ -31,7 +31,7 @@
     --paper: #0d1117;
     --ink: #e6edf3;
     --ink-dim: #9198a1;
-    --ink-faint: #6e7681;
+    --ink-faint: #7d8590; /* 4.64:1 on card, 5.07:1 on paper - WCAG AA */
     --card: #161b22;
     --line: #3d444d;
     --line-soft: #21262d;

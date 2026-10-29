@@ -365,6 +365,79 @@ export const endpointDeletedDetail: DeliveryDetail = {
   ],
 };
 
+/**
+ * The straightforward one: accepted on the first try, 95 ms. Its detail screen has
+ * no Replay button and nothing to wait for, which is the state the other two
+ * fixtures never show.
+ */
+export const deliveredDeliveryDetail: DeliveryDetail = {
+  ...deliveredDelivery,
+  event: {
+    id: deliveredDelivery.event.id,
+    type: 'invoice.paid',
+    payload: {
+      invoice_id: 'INV-2026-0884',
+      customer_id: 'cus_8Hq2Lm',
+      amount: 4990.0,
+      currency: 'SEK',
+    },
+    created_at: '2026-10-25T15:10:00.000Z',
+  },
+  endpoint: slack,
+  attempt_log: [
+    {
+      id: '0199c5a7-7001-7a11-8b02-1c3d5e7f9a04',
+      number: 1,
+      started_at: '2026-10-25T15:10:00.000Z',
+      duration_ms: 95,
+      status_code: 200,
+      error: null,
+      response_excerpt: '{"ok":true}',
+    },
+  ],
+};
+
+/**
+ * Timed out once, then went through five seconds later. The point of this one is
+ * that `attempts: 2` and a green `delivered` belong together: a retry that worked
+ * is a success, not a half-failure.
+ */
+export const recoveredDeliveryDetail: DeliveryDetail = {
+  ...recoveredDelivery,
+  event: {
+    id: recoveredDelivery.event.id,
+    type: 'payment.completed',
+    payload: {
+      order_id: 'A-1098',
+      customer_id: 'cus_2Kp9Wd',
+      amount: 549.0,
+      currency: 'SEK',
+    },
+    created_at: '2026-10-25T14:45:00.000Z',
+  },
+  endpoint: n8n,
+  attempt_log: [
+    {
+      id: '0199c59c-5001-7b11-9c02-2d4e6f8a0b15',
+      number: 1,
+      started_at: '2026-10-25T14:45:00.000Z',
+      duration_ms: 10000,
+      status_code: null,
+      error: 'timeout',
+      response_excerpt: null,
+    },
+    {
+      id: '0199c59c-5002-7c22-ad13-3e5f7a9b1c26',
+      number: 2,
+      started_at: '2026-10-25T14:45:15.000Z',
+      duration_ms: 120,
+      status_code: 200,
+      error: null,
+      response_excerpt: '{"received":true}',
+    },
+  ],
+};
+
 // Errors
 //
 // Every failing request answers with this shape. The dashboard renders these
