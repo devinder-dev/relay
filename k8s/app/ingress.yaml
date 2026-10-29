@@ -1,0 +1,29 @@
+# Ingress: the route from https://api.myrelay.tech to the API's Service (step 1.7).
+# It takes over the host from the hello app, which is removed by hand at the first
+# deploy (step 1.8): two Ingresses for the same host would compete in Traefik.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: relay-api
+  namespace: relay
+  annotations:
+    # cert-manager sees this and gets a certificate for the host. Secrets belong to one
+    # namespace, so this is a new certificate for "relay", not the hello app's copy.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - api.myrelay.tech
+      secretName: api-myrelay-tech-tls
+  rules:
+    - host: api.myrelay.tech
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: relay-api
+                port:
+                  name: http

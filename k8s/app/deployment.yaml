@@ -1,0 +1,83 @@
+# The Relay API (step 1.7). Applied only by the pipeline, through relay-deploy, which
+# replaces __GIT_SHA__ with the commit being deployed. Don't apply this file by hand.
+#
+# Deployment: "keep 2 copies of the API running, and replace them one at a time."
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-api
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-api
+spec:
+  # Two pods from day one, behind one Service (VG1). In Phase 8 the autoscaler (HPA)
+  # takes over the count and this line goes away.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: relay-api   # manage the pods that carry this label...
+  # Rolling update: start 1 new pod, wait until it's ready, then stop 1 old one, and repeat.
+  # There are never fewer than 2 ready pods, so a deploy drops no requests (VG2).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: relay-api # ...and give every new pod this label
+    spec:
+      # The API never talks to Kubernetes, so its pods get no ServiceAccount token at all.
+      automountServiceAccountToken: false
+      # Run as the image's "bun" user. Kubernetes can only check that a user isn't root
+      # when it gets a number, so the uid is written out (1000, seen in step 1.4).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault            # the container runtime's default syscall filter
+      containers:
+        - name: api
+          image: ghcr.io/devinder-dev/relay-api:__GIT_SHA__
+          ports:
+            - name: http                  # probes, the Service and the Ingress use this name
+              containerPort: 8080
+          # readiness: "may this pod get traffic?" No → out of the Service, but kept running.
+          # liveness: "is it alive?" No, 3 times → restarted. Never checks the database.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # Before SIGTERM, wait 5 s, so Traefik stops sending this pod traffic first.
+          # Then server.ts closes the app: running requests finish, new ones get 503.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          # requests = guaranteed (the HPA calculates its % from cpu later).
+          # limits = the ceiling: above 256 MiB of memory the container is restarted.
+          # The 1.3 load test peaked at 93 MB. No CPU limit on purpose: it would slow the API
+          # down even when the server has CPU to spare; the request is what scheduling uses.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true  # nothing in the image can be changed at runtime
+            capabilities:
+              drop: ["ALL"]

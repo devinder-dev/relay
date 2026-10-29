@@ -1,0 +1,15 @@
+# Service: a stable name ("relay-api") inside the cluster for the API pods (step 1.7).
+# Pods come and go during a rollout; the Service always points at the ready ones.
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-api
+  namespace: relay
+spec:
+  selector:
+    app.kubernetes.io/name: relay-api   # the label the Deployment gives its pods
+  ports:
+    - name: http
+      port: 80            # the Service listens on 80...
+      targetPort: http    # ...and forwards to the pods' port named "http" (8080)
+  # The metrics port (9090) is added in Phase 7, when /metrics exists.
