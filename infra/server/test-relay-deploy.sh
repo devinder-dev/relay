@@ -35,7 +35,8 @@ case "\$*" in
   get*) echo "fake kubectl \$*" ;;
 esac
 EOF
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/flock"
+  # flock: gets the lock, unless lock-busy exists (another deploy holds it the whole time).
+  printf '#!/usr/bin/env bash\n[ -e "%s/lock-busy" ] && exit 1\nexit 0\n' "$T" > "$T/bin/flock"
   chmod +x "$T/bin/"*
   : > "$T/broken"
 }
@@ -97,6 +98,12 @@ echo "9. A damaged last-good note is never used"
 setup; echo "not a commit; touch /tmp/pwned" > "$T/home/.relay-last-good"; echo $BAD > "$T/broken"; code=$(run $BAD)
 check "exits 1" "$code" 1
 check "never checks out what's in the note" "$(cat "$T/checked-out")" $BAD
+
+echo "10. Another deploy still holds the lock"
+setup; touch "$T/lock-busy"; code=$(run $GOOD)
+check "exits 1" "$code" 1
+check "says to re-run" "$(grep -q 're-run this job' "$T/out" && echo yes || echo no)" yes
+check "changes nothing" "$(exists "$T/checked-out")" no
 
 echo; echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]
