@@ -14,8 +14,10 @@ run alone, never inside a pasted block.
 - **one.com network firewall:** exactly three rules, IPv4 TCP 22, 80 and 443. No `All` rule
   and nothing for IPv6. ufw can't filter ports that Kubernetes publishes (NodePorts), so this
   firewall is the only thing blocking them. When changing rules, add the new one before
-  deleting an old one, so SSH never drops. Check from outside: `nc -z -G 3 <vps-ip> 30795`
-  must fail, and 22, 80, 443 must answer.
+  deleting an old one, so SSH never drops. Check from outside, both ways: 22, 80 and 443 must
+  answer AND 30795 must not. A check that only expects a failure can't tell a blocked port from
+  a broken command. macOS: `nc -z -G 3 <vps-ip> <port>`; Linux (netcat-openbsd has no `-G`,
+  so there it fails before connecting): `nc -z -w 3 <vps-ip> <port>`.
 - **get.tech DNS:** A records `api`, `cdn` and `grafana` → the VPS's IPv4 address. No AAAA
   records: the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
 
@@ -49,7 +51,9 @@ run alone, never inside a pasted block.
 ## 5. GitHub settings (not in git; made with `gh`, stored by GitHub)
 
 - Ruleset `protect-main`: PR + 1 approval, approval after the last push, no force-push, no
-  deletion. Squash merges only. Required check `api-test`.
+  deletion. Squash merges only. Required checks `api-test` and `deploy-script-test` (since
+  29 Oct). "Approval after the last push" is `require_last_push_approval: true`: an old
+  approval stays visible, but a PR can't merge until the newest push is approved.
 - Environment `production`: only `main` may use it. Secret `DEPLOY_SSH_KEY`, variables
   `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`.
 - GHCR package `relay-api`: public, so the cluster pulls it without a password.
@@ -66,4 +70,9 @@ from git and these scripts. Only the database holds data that can't be rebuilt.
 `unattended-upgrades` installs security updates every day but never reboots by itself
 (`Automatic-Reboot` stays off, so a demo is never interrupted). After a kernel update
 (`/var/run/reboot-required` exists), reboot by hand at a quiet time, never in the week of the
-defense, and check that `/version` answers again afterwards.
+defense.
+
+- **Before:** check that the running version is the last deploy, so a reboot can't quietly
+  bring back an old image: `curl -s https://api.myrelay.tech/version` must show the same
+  commit as `git rev-parse origin/main`.
+- **After:** `/version` answers again with that same commit.

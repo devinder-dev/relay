@@ -37,11 +37,11 @@ commit on `main`.
   so the rule above is a hard rule: every Dockerfile change is reviewed against it.
 - If an image ever has to contain something that isn't public, this decision is revisited for
   that image (private, with a pull secret).
-- Check that an image is still public (200 = public, 401 or 403 = private):
+- Check that the package is still public, without needing a tag that exists. A public package
+  answers with its tag list; a private (or missing) one answers `DENIED`. Keep the two parts
+  joined with `&&`, so the second never runs without a token:
 
 ```bash
-TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:devinder-dev/relay-api:pull&service=ghcr.io" | jq -r .token)
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json" \
-  https://ghcr.io/v2/devinder-dev/relay-api/manifests/<commit sha>
+TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:devinder-dev/relay-api:pull&service=ghcr.io" | jq -r .token) && \
+  curl -s -H "Authorization: Bearer $TOKEN" https://ghcr.io/v2/devinder-dev/relay-api/tags/list
 ```

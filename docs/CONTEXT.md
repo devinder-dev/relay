@@ -127,13 +127,18 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
   443 over IPv4, and nothing over IPv6. ufw on the server allows 22, 80, 443 and the k3s
   networks 10.42.0.0/16 and 10.43.0.0/16. ufw can't filter ports that Kubernetes publishes
   itself (NodePorts, such as Traefik's 30795 and 32338), so only one.com's firewall blocks
-  those. It must never get an "All" rule again (it had one until 29 Oct). Check from outside:
-  `nc -z -G 3 81.88.23.71 30795` must fail.
+  those. It must never get an "All" rule again (it had one until 29 Oct). Check from outside,
+  both ways: `443` must answer AND `30795` must not. A check that only expects a failure can't
+  tell a blocked port from a broken command. macOS: `nc -z -G 3 81.88.23.71 <port>`;
+  Linux (netcat-openbsd has no `-G`): `nc -z -w 3 81.88.23.71 <port>`.
 - **kubectl:** only on the server (`ssh relay`, then `kubectl …`). Port 6443 stays closed.
 - **Deploy path:** GitHub Actions (environment `production`, main only) logs in as the Linux
   user `deploy`, whose key can only start `/usr/local/bin/relay-deploy`. The script deploys a
   commit only if it is on main, using the Kubernetes account `deployer` (namespace `relay`
   only, no Secrets). Which folder is applied how: [`k8s/README.md`](../k8s/README.md).
+- **Two replicas, one node:** the API runs 2 pods behind Traefik. That gives zero-downtime
+  rollouts and protection against one crashing process. It is **not** high availability: if
+  the VPS goes down, everything is down.
 - **Domain:** `myrelay.tech`, DNS at get.tech. A records for `api`, `cdn` (the Relay dashboard)
   and `grafana` (the ops dashboard: metrics and logs) all point to the VPS. **No AAAA records**:
   the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
@@ -145,7 +150,8 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
 ## Git workflow
 
 - `main` is protected: changes only through a PR with 1 approval from the other person,
-  no force-pushes, no deletion. Once the pipeline exists, it must pass too.
+  no force-pushes, no deletion, and the required checks `api-test` and `deploy-script-test`
+  must be green. An approval only counts for the newest push.
 - Branch names: `feat/…`, `fix/…`, `docs/…`, `infra/…`, `test/…`.
 - Commit messages: `type: short summary` (for example `docs: add team context`).
 - Small PRs, squash-merge, delete the branch after merging.
@@ -157,13 +163,12 @@ Phase 0 (server foundation) is done: VPS hardened, k3s, cert-manager with Let's 
 issuers, and a temporary hello-world app on https://api.myrelay.tech with a trusted
 certificate.
 
-Phase 1 (walking skeleton) is nearly done. Merged: HTTP → HTTPS redirect (1.1), DNS for cdn
-and grafana (1.2), the API skeleton in `api/` with its Docker image (1.3–1.4, #11), and the
-deploy path (1.6, #13): a `deploy` user whose key can only run `relay-deploy`, and a
-`deployer` account limited to namespace `relay`. In review, to be merged in this order: the CI
-pipeline (1.5, #12), rollback to the last good commit (#14), the API manifests (1.7, #15) and
-the deploy job (1.8, #16). Then `api.myrelay.tech` switches from the hello app to the API with
-the first deploy through the pipeline.
+Phase 1 (walking skeleton) is done (29 Oct). Every merge to `main` is tested, built and
+deployed by the pipeline, then checked from outside on `https://api.myrelay.tech/version`.
+The API runs as 2 pods with probes, a rolling update and graceful shutdown. Tested live:
+76,466 requests from 20 clients during a deploy, 0 failed; a deliberately failed deploy rolled
+back to the last good commit with 119,824 requests and 0 failed, and users never saw the bad
+version. The hello app is gone. Next: Phase 2, the database foundation.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
