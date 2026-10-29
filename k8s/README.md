@@ -6,7 +6,6 @@ How each folder gets onto the cluster, and who may apply it.
 |---|---|---|
 | `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace and the `deployer` account | One of us, by hand, after the PR is reviewed |
 | `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
-| `k8s/hello/` | The temporary hello-world test app | By hand. Removed when the API takes over in step 1.7 |
 
 ## Rules
 
