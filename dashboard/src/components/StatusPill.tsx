@@ -12,7 +12,9 @@ const colours: Record<DeliveryStatus | EndpointStatus, string> = {
 
 export default function StatusPill({ status }: { status: DeliveryStatus | EndpointStatus }) {
   return (
-    <span className={`mono rounded-full px-2 py-0.5 text-xs ${colours[status]}`}>
+    // data-testid: the e2e tests find the status by this, not by its colour classes,
+    // so restyling the pill can't break them.
+    <span data-testid="status" className={`mono rounded-full px-2 py-0.5 text-xs ${colours[status]}`}>
       {status}
     </span>
   )

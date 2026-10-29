@@ -6,11 +6,16 @@ import type { Endpoint, EndpointCreated } from '../types'
 const field =
   'mono w-full rounded-md border border-[var(--line-soft)] bg-[var(--paper)] px-3 py-1.5 text-sm text-[var(--ink)] placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)] focus:outline-none'
 
-// Loopback, the three private IPv4 ranges, link-local, and IPv6 loopback. The API
-// does the real check: it resolves the name first, because a public name can still
-// point at 127.0.0.1.
-const PRIVATE_HOST =
-  /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/i
+// Addresses by number: loopback, 0.0.0.0, the three private IPv4 ranges, CGNAT,
+// link-local, and IPv6 loopback.
+const PRIVATE_ADDRESS =
+  /^(localhost$|127\.|0\.0\.0\.0$|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[?::1\]?$)/i
+
+// Addresses by name. Inside the cluster nothing is reached by number: the API is
+// kubernetes.default.svc.cluster.local and Postgres is postgres.relay.svc…, so a
+// rule that only knows about digits lets both straight through. Cloud metadata
+// answers to a name too (metadata.google.internal).
+const INTERNAL_NAME = /(^|\.)(local|internal|localdomain)$|(^|\.)svc(\.|$)/i
 
 // What counts as an endpoint URL we are willing to POST to.
 //
@@ -31,7 +36,9 @@ function checkUrl(raw: string): string | null {
   if (parsed.protocol !== 'https:') return 'The URL must start with https://'
 
   const host = parsed.hostname
-  if (PRIVATE_HOST.test(host)) return 'The URL must not point at a private or internal address'
+  if (PRIVATE_ADDRESS.test(host) || INTERNAL_NAME.test(host)) {
+    return 'The URL must not point at a private or internal address'
+  }
   if (!host.includes('.') || host.endsWith('.')) return 'That host name does not look reachable'
 
   return null
