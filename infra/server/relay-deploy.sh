@@ -35,6 +35,16 @@ if ! git -C "$REPO" merge-base --is-ancestor "$SHA" "origin/main"; then
   fail "commit $SHA is not part of origin/main's history"
 fi
 
+# When a rollout fails, show why in the CI log: the pods' states and Kubernetes' latest
+# events (an image that can't be pulled, a failing probe, a crash). "|| true": printing
+# them must never change the result.
+show_state() {
+  echo "--- pods"
+  kubectl get pods -o wide || true
+  echo "--- latest events"
+  kubectl get events --sort-by=.lastTimestamp 2>&1 | tail -n 20 || true
+}
+
 # Deploys one commit: its manifests in k8s/app/ with its images, then waits until every
 # Deployment it touched is ready. Returns 0 on success and 1 on any failure.
 # Every step ends with "|| return 1": inside a function that is called from "if", set -e
@@ -63,7 +73,10 @@ deploy_commit() {
   # Wait until each Deployment it touched has its new pods ready (the API, the dashboard,
   # and later the worker), so one that never gets ready can't pass as a success.
   for deployment in $(echo "$applied" | grep '^deployment'); do
-    kubectl rollout status "$deployment" --timeout=180s || return 1
+    if ! kubectl rollout status "$deployment" --timeout=180s; then
+      show_state
+      return 1
+    fi
   done
 }
 
@@ -77,6 +90,10 @@ fi
 # 5. The deploy failed: put the last good commit back, manifests and images.
 if [ -f "$LAST_GOOD_FILE" ]; then
   last_good=$(cat "$LAST_GOOD_FILE")
+  # The note's content goes into git and sed below, just like $SHA, so it gets gate 1's check.
+  if ! [[ "$last_good" =~ ^[0-9a-f]{40}$ ]]; then
+    fail "deploy of $SHA failed, and the last-good note is damaged ('$last_good'): a human is needed"
+  fi
   echo "rolling back to last good commit $last_good"
   deploy_commit "$last_good" || fail "rollback to $last_good failed"
   echo "rolled back to $last_good"

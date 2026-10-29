@@ -38,6 +38,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # Read-only: when a rollout fails, relay-deploy prints the latest events (an image that
+  # can't be pulled, a failing probe) into the CI log, so nobody has to log in to see why.
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list"]
   # The stable name in front of the pods, and the app's non-secret settings.
   - apiGroups: [""]
     resources: ["services", "configmaps"]

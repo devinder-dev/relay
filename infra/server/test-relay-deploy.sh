@@ -14,19 +14,25 @@ setup() {
   mkdir -p "$T/bin" "$T/home/relay/k8s/app"
   echo "kind: Deployment" > "$T/home/relay/k8s/app/api.yaml"
   sed "s#/home/deploy#$T/home#g" "$SCRIPT" > "$T/relay-deploy"
-  # git: "checkout" notes which commit is checked out; everything else (fetch, the main check) passes.
+  # git: "checkout" notes which commit is checked out. The main check (merge-base) says
+  # "not on main" when not-on-main exists. Everything else (fetch) passes.
   cat > "$T/bin/git" <<EOF
 #!/usr/bin/env bash
-case "\$*" in *checkout*) echo "\${@: -1}" > "$T/checked-out" ;; esac
+case "\$*" in
+  *checkout*) echo "\${@: -1}" > "$T/checked-out" ;;
+  *merge-base*) [ -e "$T/not-on-main" ] && exit 1 ;;
+esac
 exit 0
 EOF
-  # kubectl: apply prints one Deployment (or fails if apply-fails exists);
-  # rollout status fails when the checked-out commit is listed in "broken".
+  # kubectl: apply notes that it ran and prints one Deployment (or fails if apply-fails exists);
+  # rollout status fails when the checked-out commit is listed in "broken";
+  # get (pods, events) prints a line, as the real one would.
   cat > "$T/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  apply*) cat > /dev/null; [ -e "$T/apply-fails" ] && exit 1; echo deployment.apps/relay-api ;;
+  apply*) cat > /dev/null; touch "$T/applied"; [ -e "$T/apply-fails" ] && exit 1; echo deployment.apps/relay-api ;;
   "rollout status"*) grep -qx "\$(cat "$T/checked-out")" "$T/broken" && exit 1; exit 0 ;;
+  get*) echo "fake kubectl \$*" ;;
 esac
 EOF
   printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/flock"
@@ -66,6 +72,31 @@ echo "5. kubectl apply fails (the set -e trap inside a function)"
 setup; touch "$T/apply-fails"; code=$(run $GOOD)
 check "exits 1" "$code" 1
 check "doesn't record it as last good" "$(cat "$T/home/.relay-last-good" 2>/dev/null || echo none)" none
+
+exists() { [ -e "$1" ] && echo yes || echo no; }
+
+echo "6. Gate 1 refuses anything that isn't a full commit SHA"
+for input in "whoami" "$GOOD; touch /tmp/pwned" "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" "$GOOD "; do
+  setup; code=$(run "$input")
+  check "refuses '$input'" "$code" 1
+  check "checks nothing out for '$input'" "$(exists "$T/checked-out")" no
+done
+
+echo "7. Gate 2 refuses a commit that isn't on main"
+setup; touch "$T/not-on-main"; code=$(run $GOOD)
+check "exits 1" "$code" 1
+check "checks nothing out" "$(exists "$T/checked-out")" no
+check "applies nothing" "$(exists "$T/applied")" no
+
+echo "8. A failed rollout shows why in the log"
+setup; echo $BAD > "$T/broken"; code=$(run $BAD)
+check "prints the pods" "$(grep -q -- '--- pods' "$T/out" && echo yes || echo no)" yes
+check "prints the latest events" "$(grep -q -- '--- latest events' "$T/out" && echo yes || echo no)" yes
+
+echo "9. A damaged last-good note is never used"
+setup; echo "not a commit; touch /tmp/pwned" > "$T/home/.relay-last-good"; echo $BAD > "$T/broken"; code=$(run $BAD)
+check "exits 1" "$code" 1
+check "never checks out what's in the note" "$(cat "$T/checked-out")" $BAD
 
 echo; echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]
