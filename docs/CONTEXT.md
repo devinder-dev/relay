@@ -123,8 +123,12 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
 - **Access:** personal users `devinder` and `abdikhani`, SSH keys only, no root login.
   Log in with `ssh relay` (alias in each person's `~/.ssh/config`). `administrator` is
   one.com's default account, kept as a backup.
-- **Firewalls:** one.com's network firewall + ufw. ufw allows 22, 80, 443 and the k3s networks
-  10.42.0.0/16 and 10.43.0.0/16. one.com's firewall allows 22, 80 and 443.
+- **Firewalls:** two layers. one.com's network firewall (web panel) allows only TCP 22, 80 and
+  443 over IPv4, and nothing over IPv6. ufw on the server allows 22, 80, 443 and the k3s
+  networks 10.42.0.0/16 and 10.43.0.0/16. ufw can't filter ports that Kubernetes publishes
+  itself (NodePorts, such as Traefik's 30795 and 32338), so only one.com's firewall blocks
+  those. It must never get an "All" rule again (it had one until 29 Oct). Check from outside:
+  `nc -z -G 3 81.88.23.71 30795` must fail.
 - **kubectl:** only on the server (`ssh relay`, then `kubectl …`). Port 6443 stays closed.
 - **Deploy path:** GitHub Actions (environment `production`, main only) logs in as the Linux
   user `deploy`, whose key can only start `/usr/local/bin/relay-deploy`. The script deploys a
@@ -134,8 +138,9 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
   and `grafana` (the ops dashboard: metrics and logs) all point to the VPS. **No AAAA records**:
   the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
 - **HTTP → HTTPS:** `k8s/platform/traefik-config.yaml` (a HelmChartConfig) redirects port 80 to
-  443 for every host with a 308, except `/.well-known/acme-challenge/`, so certificate checks still
-  work over plain HTTP.
+  443 for every host with a permanent redirect (301 for GET, 308 for other methods, so a POST
+  keeps its method and body), except `/.well-known/acme-challenge/`, so certificate checks
+  still work over plain HTTP.
 
 ## Git workflow
 
@@ -152,12 +157,13 @@ Phase 0 (server foundation) is done: VPS hardened, k3s, cert-manager with Let's 
 issuers, and a temporary hello-world app on https://api.myrelay.tech with a trusted
 certificate.
 
-Phase 1 (walking skeleton) is well under way. Done: HTTP → HTTPS redirect (1.1), DNS for cdn
-and grafana (1.2), the API skeleton in `api/` with its Docker image (1.3–1.4, PR #11), the CI
-pipeline that tests every PR and pushes the image from main (1.5, PR #12), and the deploy path
-(1.6): a `deploy` user whose key can only run `relay-deploy`, and a `deployer` account limited
-to namespace `relay`. Next: 1.7, the API manifests in `k8s/app/`, then 1.8, the first deploy
-through the pipeline.
+Phase 1 (walking skeleton) is nearly done. Merged: HTTP → HTTPS redirect (1.1), DNS for cdn
+and grafana (1.2), the API skeleton in `api/` with its Docker image (1.3–1.4, #11), and the
+deploy path (1.6, #13): a `deploy` user whose key can only run `relay-deploy`, and a
+`deployer` account limited to namespace `relay`. In review, to be merged in this order: the CI
+pipeline (1.5, #12), rollback to the last good commit (#14), the API manifests (1.7, #15) and
+the deploy job (1.8, #16). Then `api.myrelay.tech` switches from the hello app to the API with
+the first deploy through the pipeline.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
