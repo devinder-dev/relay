@@ -28,6 +28,7 @@ jobs:
   test:
     name: api-test
     runs-on: ubuntu-24.04
+    timeout-minutes: 10 # a hung step stops here instead of GitHub's 6-hour default
     defaults:
       run:
         working-directory: api
@@ -45,6 +46,7 @@ jobs:
     name: api-image
     needs: test
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write # only this job may push to GHCR, and it only pushes on main
