@@ -22,7 +22,13 @@ How each folder gets onto the cluster, and who may apply it.
   by hand: the tag would be wrong.
 - **Removing a file from `k8s/app/` doesn't remove it from the cluster.** The `deployer`
   account has no delete, so one of us deletes the resource by hand:
-  `kubectl -n relay delete <kind>/<name>`.
+  `kubectl -n relay delete <kind>/<name>`. **Renaming is the dangerous case:** the new name is
+  created, but the old object stays and keeps serving (two Services or two Ingresses for the
+  same thing). A rename = the new name in the PR, plus deleting the old object right after it
+  merges.
+- **Server and platform changes are applied by the one who merges, right after merging**, and
+  the check output is posted on the PR (for example `auth can-i` and the script `diff`).
+  Otherwise git and the server drift apart, and it only shows when something fails.
 - **No Secrets in git.** They are created on the server with `kubectl create secret`.
 - **Git and the cluster must match.** Everything applied by hand is committed in the same PR.
 
