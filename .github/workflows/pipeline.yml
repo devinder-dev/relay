@@ -103,10 +103,11 @@ jobs:
       - name: Check that the new version is live
         # relay-deploy already waited for ready pods inside the cluster. This checks the whole
         # public path a customer uses (DNS, certificate, Traefik, Service, pod) from outside.
-        # An old pod can still answer for a few seconds after the rollout, so we ask a few times.
+        # An old pod can still answer for a few seconds after the rollout, and the first deploy
+        # also waits for a brand-new certificate, so we ask for up to 36 × 5 s ≈ 3 minutes.
         shell: bash # GitHub then adds -e and pipefail, so a failed curl isn't hidden behind jq
         run: |
-          for attempt in $(seq 1 12); do
+          for attempt in $(seq 1 36); do
             # -f: an error answer (404, 503) counts as a failure. --max-time: never hang.
             live=$(curl -fsS --max-time 10 https://api.myrelay.tech/version | jq -r .sha) \
               || live="no answer"
@@ -117,5 +118,5 @@ jobs:
             fi
             sleep 5
           done
-          echo "::error::api.myrelay.tech still doesn't run $GITHUB_SHA after 12 tries"
+          echo "::error::api.myrelay.tech still doesn't run $GITHUB_SHA after 36 tries"
           exit 1
