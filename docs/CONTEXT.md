@@ -106,7 +106,7 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 | Database | `postgres:18.6` StatefulSet, volume mounted at `/var/lib/postgresql`, our own StorageClass `local-path-retain` (the default deletes data) | Neon / Supabase (brief: everything on our own VPS) |
 | Orchestration | k3s v1.36.5 (Traefik, metrics-server, local-path, secrets encryption on) | Docker Compose |
 | HTTPS | cert-manager v1.21.2 + Let's Encrypt, staging first; HTTP → HTTPS redirect in Traefik with `allowACMEByPass` | certbot by hand |
-| Images | GHCR (public package), tag = git SHA | Docker Hub |
+| Images | GHCR, public package ([decision 0004](decisions/0004-public-container-images.md)), tag = git SHA | Docker Hub, a private package with a pull secret |
 | CI/CD | GitHub Actions: test → build → push → deploy over SSH as a `deploy` user with a forced command (port 6443 stays closed), then check `/version` | Self-hosted runner, opening 6443, Argo CD |
 | Observability | Slim kube-prometheus-stack + Loki + Alloy (Promtail is end-of-life); Grafana Cloud free tier as fallback | Datadog |
 | Backups | Nightly CronJob: `pg_dump` → **Amazon S3** (eu-north-1), one timed restore | Volume snapshots, R2, B2 |
