@@ -1,0 +1,106 @@
+# The Relay dashboard on https://cdn.myrelay.tech: static files built by Vite and
+# served by nginx. Deployment, Service and Ingress, like the API's own manifests in
+# k8s/app/, with four differences: port 8080 instead of 80 (the unprivileged nginx
+# image cannot bind a low port), probes so a rollout never sends traffic to a pod
+# that is not serving yet, small resource requests because the VPS is shared with
+# Postgres, the API and Grafana, and cdn.myrelay.tech instead of api.myrelay.tech.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+spec:
+  replicas: 2            # two pods, so a rollout always has one serving
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0  # never take a pod down before its replacement is ready
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+    spec:
+      containers:
+        - name: nginx
+          # Tag is the git SHA, set by the pipeline. Never "latest": a rollback has
+          # to name an exact build, and "latest" means something different tomorrow.
+          image: ghcr.io/devinder-dev/relay-dashboard:PLACEHOLDER_SHA
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            # Kubernetes sends no traffic here until this answers. Without it, a new
+            # pod receives requests while nginx is still starting.
+            httpGet:
+              path: /index.html
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            # If this stops answering, the pod is restarted.
+            httpGet:
+              path: /index.html
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            # Serving static files needs almost nothing. The requests exist so the
+            # scheduler knows this pod is cheap and leaves room for the database.
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            # Namespace relay enforces Pod Security "restricted" (k8s/platform/deployer.yaml),
+            # which requires all four of these. runAsNonRoot and seccompProfile are not
+            # optional hardening here: without them the API server refuses the pod, even
+            # though the image already runs as uid 101. Kubernetes does not look inside the
+            # image to check, so being non-root has to be declared.
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            allowPrivilegeEscalation: false
+            # Not required by "restricted". Left false because nginx writes its cache and
+            # pid file under /var; making it read-only would mean emptyDir mounts for both.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+spec:
+  selector:
+    app: dashboard
+  ports:
+    - port: 80          # the Service listens on 80 inside the cluster...
+      targetPort: 8080  # ...and forwards to 8080 in the pod
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - cdn.myrelay.tech
+      secretName: cdn-myrelay-tech-tls
+  rules:
+    - host: cdn.myrelay.tech
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
+                port:
+                  number: 80
