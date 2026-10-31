@@ -4,10 +4,25 @@
 # Applied by hand by one of us (platform files are never applied by the pipeline).
 
 # The folder our app lives in, apart from system parts like kube-system and cert-manager.
+#
+# Pod Security (step 2.0): the API server refuses any pod in relay that doesn't meet the
+# "restricted" standard: no root, no privileged mode, no host folders, network or ports, no
+# extra Linux capabilities. Without it, one merged manifest could run a privileged pod, which
+# means control of the whole server, and from Phase 2 the database lives here.
+#   enforce: refuse the pod.  warn: kubectl prints why.  audit: noted in the audit log.
+#   -version: the rules of Kubernetes 1.36, so an upgrade can't tighten them by surprise.
+# The deployer account can't change Namespace labels, so it can't switch this off.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: relay
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.36
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.36
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.36
 ---
 # An identity for a program (the deploy script), not for a person.
 apiVersion: v1

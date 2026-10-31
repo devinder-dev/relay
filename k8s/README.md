@@ -4,7 +4,7 @@ How each folder gets onto the cluster, and who may apply it.
 
 | Folder | What's in it | Applied by |
 |---|---|---|
-| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace and the `deployer` account | One of us, by hand, after the PR is reviewed |
+| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account and the Service policy for `relay` | One of us, by hand, after the PR is reviewed |
 | `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
 
 ## Rules
@@ -28,6 +28,18 @@ How each folder gets onto the cluster, and who may apply it.
 - **Server and platform changes are applied by the one who merges, right after merging**, and
   the check output is posted on the PR (for example `auth can-i` and the script `diff`).
   Otherwise git and the server drift apart, and it only shows when something fails.
+- **Two guards on namespace `relay`**, checked by the API server before anything is saved,
+  whoever sends it (the pipeline or one of us):
+  - **Pod Security `restricted`** (labels in `deployer.yaml`): no pod runs as root,
+    privileged, or with host folders, network or ports. Every pod spec needs
+    `runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities: drop: ["ALL"]` and the
+    `RuntimeDefault` seccomp profile, as `k8s/app/deployment.yaml` shows.
+  - **Services stay inside the cluster** (`relay-service-policy.yaml`): only type ClusterIP
+    (headless included), never `externalIPs`. ufw can't filter ports that Kubernetes
+    publishes, so nothing in `relay`, and above all Postgres, may publish one.
+- **The issuers' challenge Services are ClusterIP** (`cluster-issuers.yaml`). cert-manager's
+  default is NodePort, which the Service policy would refuse in `relay`. Apply the issuers
+  before the policy.
 - **No Secrets in git.** They are created on the server with `kubectl create secret`.
 - **Git and the cluster must match.** Everything applied by hand is committed in the same PR.
 
