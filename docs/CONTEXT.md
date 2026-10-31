@@ -92,7 +92,7 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 
 | Area | Choice | Not chosen |
 |---|---|---|
-| Runtime | Bun **1.4.4**, pinned everywhere (laptop, CI, Docker). 1.4 is a new rewrite in Rust | Node (more common, but we know Bun; it stays our fallback) |
+| Runtime | **API and worker:** Bun **1.4.4**, pinned on the laptops, in CI and in Docker (1.4 is a new rewrite in Rust). **Dashboard build and e2e:** Node **24.22.1** ([decision 0005](decisions/0005-dashboard-toolchain.md)) | *For the API:* Node (more common, but we know Bun; it stays our fallback). *For the dashboard:* Bun (Vite and Playwright are built for and released against Node) |
 | Web framework | **Fastify 5** ([decision 0001](decisions/0001-web-framework-fastify.md)): `buildApp()` + `listen({ host: "0.0.0.0" })`, pino logs, Zod validation, `@fastify/cors`, `inject()` tests | Hono (native on Bun, but new to us), Express, Elysia |
 | Database library | postgres.js 3.4.9 behind one file `src/db.ts`: pool 5 per pod, 5 s `statement_timeout`; the API waits for the database before it listens, and answers 503 `service_unavailable` while it can't reach it | `Bun.sql` (ties the data layer to the new runtime), Drizzle |
 | API code structure | **Zod 4** for bodies, queries and env vars ([decision 0003](decisions/0003-api-code-structure.md)); layers routes → services → repositories; one Fastify error handler with one error shape; small files, one job each | Fastify JSON Schema, `fastify-type-provider-zod`, logic in route handlers |
