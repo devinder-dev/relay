@@ -142,10 +142,12 @@ jobs:
       name: production
       url: https://api.myrelay.tech
     permissions: {} # needs no GitHub access at all: it only talks to our server
-    # Budget for two Deployments: 15 min lock + 6 min rollout + 9 min public check = 30 min.
-    # Failure path: 15 min lock + 6 min rollout + 6 min rollback = 27 min; no public check.
-    # Allow 5 extra minutes above the longer path for SSH, git, kubectl and job overhead.
-    timeout-minutes: 35
+    # Budget for two Deployments, each deploy starting with the migrate Job (about 3 min at most):
+    #   success: 15 min lock + 3 migrate + 6 rollout + 9 public check      = 33 min
+    #   failure: 15 min lock + (3 + 6) deploy + (3 + 6) rollback, no check = 33 min
+    # Plus 5 minutes for SSH, git, kubectl and job overhead. When the worker (a third
+    # Deployment) arrives in Phase 4, its failure path is 39 + 5 minutes: raise this to 45.
+    timeout-minutes: 40
     steps:
       - name: Deploy the commit over SSH
         # Values arrive as environment variables, never pasted into the command itself.
