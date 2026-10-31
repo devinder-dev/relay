@@ -50,6 +50,46 @@ show_state() {
   kubectl get events --sort-by=.lastTimestamp 2>&1 | tail -n 20 || true
 }
 
+# Runs one commit's database migrations in a one-off Job (k8s/migrate/job.yaml, step 2.4),
+# then waits for the Job's verdict. Returns 0 when the Job completed. Returns 1 when it failed,
+# didn't finish in time, or its state couldn't be read: "couldn't tell" never counts as success.
+# The Job gets a fresh name every time (generateName), and Kubernetes deletes it 1 hour after
+# it finishes, because this account can't delete anything.
+run_migrations() {
+  local commit="$1" job state
+  job=$(sed "s/__GIT_SHA__/$commit/g" "$REPO/k8s/migrate/job.yaml" \
+          | kubectl create -f - -o name --request-timeout=10s) || return 1
+  echo "migrating with $job"
+
+  # Ask for the verdict every 2 s. We count tries instead of measuring time: 90 tries x 2 s
+  # waits at least 180 s (longer than the Job's own 150 s deadline + 10 s grace, so the Job
+  # always gives its verdict first), and the test harness's fake sleep then runs in milliseconds.
+  for _ in $(seq 1 90); do
+    # Only the conditions that are true, for example "SuccessCriteriaMet Complete" or
+    # "FailureTarget Failed". If we can't even read them, that's a failure, never a success.
+    state=$(kubectl get "$job" --request-timeout=10s \
+              -o jsonpath='{.status.conditions[?(@.status=="True")].type}') || return 1
+    # The spaces around the word make "Complete" match only as a whole word.
+    case " $state " in
+      *" Complete "*)
+        kubectl logs "$job" --request-timeout=10s --tail=50 || true
+        return 0
+        ;;
+      *" Failed "*)
+        # "|| true": the pod may never have started (an image that can't be pulled), so there
+        # may be no log. Printing it must never change the result.
+        kubectl logs "$job" --request-timeout=10s --tail=50 || true
+        show_state
+        return 1
+        ;;
+    esac
+    sleep 2
+  done
+
+  echo "relay-deploy: migrate Job $job didn't finish in time (it may still be running)" >&2
+  return 1
+}
+
 # Deploys one commit: its manifests in k8s/app/ with its images, then waits until every
 # Deployment it touched is ready. Returns 0 on success and 1 on any failure.
 # Every step ends with "|| return 1": inside a function that is called from "if", set -e
@@ -63,6 +103,13 @@ deploy_commit() {
   if [ ! -d "$REPO/k8s/app" ]; then
     echo "relay-deploy: no k8s/app folder at commit $commit" >&2
     return 1
+  fi
+
+  # Migrations first (from Phase 2): the database must have this commit's tables before any of
+  # its pods start. A failure stops here, before any pod changes, and the caller rolls back.
+  # Commits from before Phase 2 have no k8s/migrate/ and skip this, so rolling back to one works.
+  if [ -f "$REPO/k8s/migrate/job.yaml" ]; then
+    run_migrations "$commit" || return 1
   fi
 
   # Apply every manifest, with the placeholder __GIT_SHA__ replaced by the commit.

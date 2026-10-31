@@ -1,0 +1,63 @@
+# The migrate Job (step 2.4): runs this commit's database migrations once, BEFORE any pod of
+# the commit starts. Only relay-deploy creates it (with "kubectl create", never "apply"),
+# after replacing __GIT_SHA__ with the commit. Don't apply this file by hand: the tag would be
+# wrong, and "apply" can't use generateName.
+#
+# It uses the API's own image, so a commit's migrations always come with that commit's code.
+# dbmate only runs the files the database hasn't seen yet, so most deploys find nothing to do.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A fresh name for every deploy (migrate-x7k2p): re-running or rolling back the same commit
+  # never collides with an earlier Job, which the deployer account couldn't delete.
+  generateName: migrate-
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-migrate
+    relay.myrelay.tech/commit: "__GIT_SHA__"   # find a commit's Jobs: -l relay.myrelay.tech/commit=<sha>
+spec:
+  backoffLimit: 0                # a failed migration is never retried by itself; the deploy stops
+  activeDeadlineSeconds: 150     # a hard limit, which also ends a Job whose image can't be pulled
+  ttlSecondsAfterFinished: 3600  # Kubernetes deletes the finished Job (and its pod) after 1 hour
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: relay-migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false   # dbmate never talks to Kubernetes
+      # Kubernetes marks the Job "Failed" only once this pod has really stopped, so a short
+      # grace keeps that verdict quick: 150 s deadline + 10 s grace, well inside relay-deploy's
+      # wait of at least 180 s.
+      terminationGracePeriodSeconds: 10
+      # Pod Security "restricted": the image's own "bun" user (uid 1000), as the API pods.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/devinder-dev/relay-api:__GIT_SHA__
+          # The package.json script "db:migrate": dbmate ... migrate (see api/package.json).
+          # --bun: run dbmate's small Node launcher with Bun (the image has no real Node).
+          command: ["bun", "run", "--bun", "db:migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: relay-db
+                  key: url
+          # The CI smoke test runs this exact command with the same 128 MiB limit.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true   # dbmate writes nothing (--no-dump-schema)
+            capabilities:
+              drop: ["ALL"]
