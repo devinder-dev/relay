@@ -367,9 +367,10 @@ export const endpointDeletedDetail: DeliveryDetail = {
 
 // Errors
 //
-// Every failing request answers with this shape. These three are the ones the
-// dashboard has to render: a bad key on Connect, and the two ways Replay can be
-// refused.
+// Every failing request answers with this shape. The dashboard renders these
+// in different screens: unauthorized (Connect), already_delivered and in_flight
+// and endpoint_deleted (Replay), endpoint_limit_reached (Add Endpoint), and
+// validation_failed with details (form validation).
 
 export const errorUnauthorized: ApiError = {
   error: {
