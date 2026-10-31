@@ -1,6 +1,6 @@
 -- migrate:up
 -- Migration 001: schema v1 (step 2.4). Run by dbmate in the migrate Job before every rollout.
--- Rules for every migration (docs/decisions/0005-migrations-expand-contract.md):
+-- Rules for every migration (docs/decisions/0006-migrations-expand-contract.md):
 --   only ADD things old code can live with; never edit a merged migration; fix forward.
 --
 -- Every id is a UUIDv7 (built into Postgres 18): unique, ordered by time (so it also works as
@@ -102,7 +102,7 @@ CREATE TABLE attempts (
 CREATE INDEX attempts_delivery_id ON attempts (delivery_id, id);
 
 -- migrate:down
--- Forward-only, on purpose (ADR 0005). "dbmate rollback" would run this section and then delete
+-- Forward-only, on purpose (ADR 0006). "dbmate rollback" would run this section and then delete
 -- this migration's row in schema_migrations; an empty section would leave every table in place
 -- while marking it "not applied". Raising an error rolls the whole rollback back instead.
 -- To start over on a laptop, throw the throwaway database away.
