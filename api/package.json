@@ -6,9 +6,11 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "dbmate --wait --wait-timeout 60s --no-dump-schema --migration-lock --migration-lock-timeout 30s migrate"
   },
   "dependencies": {
+    "dbmate": "2.37.0",
     "fastify": "5.12.7",
     "zod": "4.6.7"
   },
