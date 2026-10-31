@@ -12,6 +12,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+# The migrations travel in the same image as the code that needs them, so a commit's image
+# always carries exactly that commit's schema. The migrate Job runs "bun run --bun db:migrate".
+COPY db ./db
 
 # The pipeline passes the commit; /version reports it, so we can see what's running.
 ARG GIT_SHA=dev

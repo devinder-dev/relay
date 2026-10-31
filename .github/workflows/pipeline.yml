@@ -60,16 +60,64 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build (and on main, push) the image
+      # Every PR and every merge: build the image into the runner's own Docker, so it can be
+      # tested before anything is pushed.
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: api
           platforms: linux/amd64 # the VPS is amd64; GitHub's runners build that natively
           build-args: GIT_SHA=${{ github.sha }}
-          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
-          push: ${{ github.event_name == 'push' }}
+          tags: relay-api:smoke
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Run the migrations with the image just built, the way the migrate Job runs them
+      # (uid 1000, read-only root, no capabilities, its 128 MiB limit), against a throwaway
+      # Postgres made by our own first-start script. A dbmate that can't start in the real
+      # image is found here, on the PR, instead of halfway through a deploy.
+      - name: Smoke-test the migrations inside the image
+        shell: bash # GitHub then adds -e and pipefail
+        run: |
+          docker network create smoke-net
+          docker run -d --name smoke-pg --network smoke-net \
+            -e POSTGRES_PASSWORD=test -e RELAY_DB_PASSWORD=test \
+            -v "$PWD/k8s/data/initdb:/docker-entrypoint-initdb.d:ro" \
+            postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+          for _ in $(seq 1 60); do
+            docker exec smoke-pg pg_isready -q -h 127.0.0.1 -U postgres && break
+            sleep 1
+          done
+          migrate() {
+            docker run --rm --network smoke-net --read-only --user 1000:1000 --cap-drop ALL --memory 128m \
+              -e DATABASE_URL='postgres://relay:test@smoke-pg:5432/relay?sslmode=disable' \
+              relay-api:smoke bun run --bun db:migrate
+          }
+          echo "--- first run: applies every migration"
+          migrate
+          echo "--- second run: must find nothing to do"
+          migrate
+          tables=$(docker exec smoke-pg psql -X -U postgres -d relay -Atc \
+            "select count(*) from pg_tables where schemaname = 'public' and tablename in
+             ('owners', 'api_keys', 'endpoints', 'events', 'deliveries', 'attempts')")
+          if [ "$tables" != 6 ]; then
+            echo "::error::expected the 6 tables of schema v1, found $tables"
+            exit 1
+          fi
+          docker exec smoke-pg psql -X -U postgres -d relay -Atc \
+            "select version from schema_migrations order by version" | sed 's/^/applied: /'
+      # Only after a merge to main: push the same image. Its layers come from the build above
+      # (the builder's cache), so this takes seconds and pushes what was just tested.
+      - name: Push the image (main only)
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          platforms: linux/amd64
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
+          push: true
+          cache-from: type=gha
 
   deploy-script:
     name: deploy-script-test
