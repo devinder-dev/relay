@@ -1,6 +1,12 @@
 # Let's Encrypt issuers for the whole cluster (cert-manager).
 # staging: loose rate limits, untrusted certificates. Use while testing.
 # prod:    trusted certificates, strict rate limits. Use once staging works.
+#
+# To prove we own a domain, cert-manager starts a small "solver" pod plus a Service for it,
+# in the namespace of the certificate. Left alone, that Service is a NodePort: a port opened
+# on the server itself, which ufw can't filter. "serviceType: ClusterIP" keeps it inside the
+# cluster; Traefik reaches it like any other Service. Namespace relay only allows ClusterIP
+# Services (relay-service-policy.yaml), so this setting is also what lets renewals work there.
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -14,6 +20,7 @@ spec:
       - http01:
           ingress:
             ingressClassName: traefik          # prove domain ownership through Traefik on port 80
+            serviceType: ClusterIP             # the solver's Service stays inside the cluster
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -28,3 +35,4 @@ spec:
       - http01:
           ingress:
             ingressClassName: traefik
+            serviceType: ClusterIP

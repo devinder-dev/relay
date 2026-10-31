@@ -1,0 +1,49 @@
+# Guard: in namespace relay, every Service stays inside the cluster (step 2.0).
+#
+# A Service of type NodePort or LoadBalancer, or one with externalIPs, opens a port on the
+# server itself. ufw can't filter those ports (Kubernetes publishes them past it), so only
+# one.com's firewall would stand between Postgres and the internet. This policy makes the API
+# server refuse such a Service before it's saved, whoever sends it: the pipeline's "deployer"
+# account or one of us. The deployer can't change or remove this policy.
+#
+# Applied by hand by one of us (a platform file), after cluster-issuers.yaml: cert-manager's
+# certificate Services must already be ClusterIP, or renewals in relay would be refused.
+
+# The rule: what an allowed Service looks like.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: relay-services-clusterip-only
+spec:
+  # If the rule can't be evaluated (for example it reads a missing field), refuse.
+  # A guard that lets things through when it breaks isn't a guard.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        # UPDATE too: otherwise an existing ClusterIP Service could be changed into a NodePort.
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  validations:
+    # "object" is the Service as it would be saved. Kubernetes has already filled in
+    # spec.type ("ClusterIP" when our YAML leaves it out). spec.externalIPs is optional.
+    #   !has(...) comes first: an unset field can't be read (it's an error, not null), and "||"
+    #   stops at the first true side, so size() only runs when externalIPs exists.
+    - expression: "object.spec.type == 'ClusterIP' && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
+      message: "In namespace relay a Service must be ClusterIP without externalIPs: nothing may be published outside the cluster."
+---
+# Where the rule applies, and what happens when it fails.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: relay-services-clusterip-only
+spec:
+  policyName: relay-services-clusterip-only
+  validationActions: [Deny]   # refuse the request (Warn or Audit would only report it)
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        # Every namespace carries its own name as this label. Only relay is guarded;
+        # Traefik's LoadBalancer Service in kube-system is untouched.
+        kubernetes.io/metadata.name: relay
