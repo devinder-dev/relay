@@ -58,12 +58,87 @@ run alone, never inside a pasted block.
   `DEPLOY_HOST` and `DEPLOY_KNOWN_HOSTS`.
 - GHCR package `relay-api`: public, so the cluster pulls it without a password.
 
-## 6. Data (Phase 6)
+## 6. Data: Postgres (step 2.3; backups in Phase 6)
 
-Restore the newest database dump from S3. Until then, a lost server means lost data.
+Postgres runs in namespace `relay` on a disk that is kept even if its claim is deleted
+(StorageClass `local-path-retain`). It's applied by hand, never by the pipeline
+([`k8s/README.md`](../../k8s/README.md)). From the repo root on the laptop, **in this order**,
+each step only after the previous one worked:
+
+| # | What | How | Expected |
+|---|---|---|---|
+| 1 | The StorageClass | `ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/platform/storageclass-retain.yaml` | `kubectl get sc` lists `local-path-retain … Retain`, and `local-path` stays the default |
+| 2 | The passwords | `ssh relay 'bash -s' < infra/server/bootstrap-secrets.sh` | `created postgres-auth`, `created relay-db` (or `kept …`: it never overwrites) |
+| 3 | The first-start script | `ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay create configmap postgres-init --from-file=10-create-relay.sh=/dev/stdin --dry-run=client -o yaml \| kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/data/initdb/10-create-relay.sh` | `configmap/postgres-init created` |
+| 4 | Postgres | `ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/data/postgres.yaml`, then `kubectl -n relay rollout status sts/postgres` | `postgres-0` ready; its log says `10-create-relay.sh: created the login relay and its database` |
+
+Check a login **from another pod**, never from inside `postgres-0`: the image trusts the local
+socket and `127.0.0.1` without a password, so a login from inside proves nothing.
+
+Until the backups exist (Phase 6), **a lost server means lost data**. Retain protects against
+`kubectl` mistakes (a deleted claim or namespace), not against losing the disk. Then: restore
+the newest dump from S3.
 
 k3s's own data (the cluster state) isn't backed up on purpose: everything in it is rebuilt
 from git and these scripts. Only the database holds data that can't be rebuilt.
+
+### 6a. Re-attach a kept disk (the claim `data-postgres-0` was deleted)
+
+The disk (a PersistentVolume, PV) shows `Released`, and its folder is still on the server.
+Kubernetes never reuses it by itself. **Postgres must be stopped first.** A claim that a
+running pod uses can't be deleted (it stays `Terminating`), and a running StatefulSet could
+make a new, **empty** disk for `postgres-0` before the old one is back. Never remove a
+`kubernetes.io/pvc-protection` finalizer to force things.
+
+1. Write down which disk it is: the PV name, and its folder (`.spec.hostPath.path` or
+   `.spec.local.path` in `kubectl get pv <pv> -o yaml`).
+2. `kubectl -n relay scale sts postgres --replicas=0`, and wait until `postgres-0` is gone.
+3. If the claim still exists: `kubectl -n relay delete pvc data-postgres-0`, and wait until the PV
+   shows `Released`.
+4. Free the PV for exactly one new claim, by removing only its old binding:
+   `kubectl patch pv <pv> --type json -p '[{"op":"remove","path":"/spec/claimRef"}]'`
+5. Create `data-postgres-0` again: class `local-path-retain`, `ReadWriteOnce`, `10Gi`, **and
+   `volumeName: <pv>`**, so it can only bind to that disk. Wait for `Bound`, and check that its
+   `volumeName` is the PV from step 1.
+6. `kubectl -n relay scale sts postgres --replicas=1`. The data is back.
+
+### 6b. A Secret was lost, but the disk was kept
+
+The volume still has the old password, so the API can't log in. `bootstrap-secrets.sh` makes a
+**new** password, and a new Secret **never** changes the password stored in Postgres. So set the
+stored one to the new value, without the value ever leaving the server:
+
+1. `ssh relay 'bash -s' < infra/server/bootstrap-secrets.sh` creates the missing Secret.
+2. `kubectl -n relay delete pod postgres-0`. The new pod reads the new values into its env.
+3. Set the stored password from the pod's own env. psql's `\getenv` reads it, so it's never on a
+   command line, in shell history or in Postgres's log:
+
+   ```bash
+   ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay exec -i postgres-0 -- psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres' <<'SQL'
+   \getenv pw RELAY_DB_PASSWORD
+   SET log_min_error_statement = panic;
+   ALTER ROLE relay PASSWORD :'pw';
+   SQL
+   ```
+
+   For `postgres-auth`, use `\getenv pw POSTGRES_PASSWORD` and `ALTER ROLE postgres …`. Only admins
+   can `exec`, and the local socket needs no password.
+4. `kubectl -n relay rollout restart deployment/relay-api`, so the API reads the new `url`.
+5. Check a login from another pod (section 6).
+
+Tested on 31 Oct (locally, same image): the new password, containing `'`, `;`, `$` and `"`,
+logs in, the old one is refused, and the password appears 0 times in Postgres's log.
+
+### 6c. The very first start failed halfway
+
+If `10-create-relay.sh` failed (Postgres's log shows an error instead of `created the login
+relay and its database`), the database exists but has no `relay` login. On the next start the
+image sees an existing database and **skips** the script. This can only happen on a brand-new,
+empty volume, so start over (ask the other person first: this deletes the volume):
+1. Scale Postgres to 0.
+2. Delete the PVC and then its PV.
+3. Delete the PV's folder on the server (`sudo rm -rf <path from the PV>`).
+4. Fix the script, then repeat steps 3–4 of section 6.
 
 ## Reboots
 
@@ -74,5 +149,10 @@ defense.
 
 - **Before:** check that the running version is the last deploy, so a reboot can't quietly
   bring back an old image: `curl -s https://api.myrelay.tech/version` must show the same
-  commit as `git rev-parse origin/main`.
-- **After:** `/version` answers again with that same commit.
+  commit as `git rev-parse origin/main`. This is valid because every merge to main is built and
+  deployed (`pipeline.yml` has no path filter on `push`). If a path filter ever comes back,
+  compare with the last *deployed* commit instead, or this check reports a failure after every
+  docs-only merge.
+- **After:** `/version` answers again with that same commit, and `kubectl -n relay get pods`
+  shows `postgres-0` and the API pods ready. Postgres can come up after the API: the API
+  waits for it (from step 2.6).
