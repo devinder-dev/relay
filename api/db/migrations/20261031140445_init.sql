@@ -6,9 +6,14 @@
 -- Every id is a UUIDv7 (built into Postgres 18): unique, ordered by time (so it also works as
 -- the page cursor), and impossible to guess. Statuses are text + CHECK, not an enum: adding an
 -- allowed value later is a small change, removing one from an enum is not.
+-- No updated_at columns: nothing reads them, they aren't in docs/api.md, and without a trigger
+-- they would silently mean created_at whenever an UPDATE forgot to set them. If something needs
+-- one later, a migration adds the column and its trigger together (an additive change).
 
 -- Give up after 5 s of WAITING for a lock instead of queueing every API query behind us.
 -- (An empty database has no locks to wait for; every migration starts the same way.)
+-- Tested with dbmate 2.37.0 on 1 Nov: a migration blocked by another session's lock gives up
+-- after 5 s with 55P03, and nothing is applied or recorded, so the next deploy simply retries.
 SET LOCAL lock_timeout = '5s';
 
 -- A customer of Relay.
@@ -42,8 +47,7 @@ CREATE TABLE endpoints (
   signing_secret text NOT NULL,              -- 'whsec_' + base64(32 random bytes)
   event_types    text[] NOT NULL DEFAULT '{*}' CHECK (cardinality(event_types) BETWEEN 1 AND 20),
   deleted_at     timestamptz,
-  created_at     timestamptz NOT NULL DEFAULT now(),
-  updated_at     timestamptz NOT NULL DEFAULT now()
+  created_at     timestamptz NOT NULL DEFAULT now()
 );
 -- An owner's endpoints that aren't deleted (the fan-out and the endpoint list read these).
 CREATE INDEX endpoints_owner_live ON endpoints (owner_id) WHERE deleted_at IS NULL;
@@ -64,6 +68,9 @@ CREATE TABLE events (
 -- One event to one endpoint: the queue. Workers claim due rows with FOR UPDATE SKIP LOCKED and
 -- a lease (Phase 4). While a row is leased, next_attempt_at is the lease's expiry and lease_id
 -- is the fencing token: a result is only saved by the worker that still holds the lease.
+-- So next_attempt_at is never NULL here, but the API shows it as null unless the status is
+-- 'pending' (docs/api.md). That mapping lives in ONE place, the deliveries repository's read
+-- query (Phase 3): CASE WHEN status = 'pending' THEN next_attempt_at END.
 CREATE TABLE deliveries (
   id               uuid PRIMARY KEY DEFAULT uuidv7(),
   owner_id         uuid NOT NULL REFERENCES owners ON DELETE CASCADE,
@@ -77,7 +84,6 @@ CREATE TABLE deliveries (
   last_error       text,
   delivered_at     timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
-  updated_at       timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT deliveries_event_endpoint UNIQUE (event_id, endpoint_id)
 );
 -- The worker's claim query: "pending rows that are due, oldest first". Partial: only pending
