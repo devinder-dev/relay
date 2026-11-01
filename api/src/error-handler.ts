@@ -3,6 +3,7 @@
 // Every answer has the same shape: {"error": {"code", "message", "request_id"}}.
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { ZodError } from "zod";
+import { isDatabaseUnavailable } from "./db.ts";
 import { AppError } from "./errors.ts";
 
 // Fastify's own client errors, by status, with our names for them.
@@ -33,6 +34,14 @@ export function errorHandler(error: FastifyError, request: FastifyRequest, reply
 
   if (error instanceof AppError) {
     return send(reply, request, error.status, error.code, error.message);
+  }
+
+  // The database can't be reached right now (a restart, a short blip). The pod stays up and
+  // ready; only this request fails, with a clear "try again in 5 s" instead of a vague 500.
+  if (isDatabaseUnavailable(error)) {
+    request.log.warn({ err: error }, "⚠️ database unavailable, answered 503");
+    reply.header("retry-after", "5");
+    return send(reply, request, 503, "service_unavailable", "The service is briefly unavailable, try again shortly");
   }
 
   if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
