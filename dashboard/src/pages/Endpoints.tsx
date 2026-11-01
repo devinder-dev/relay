@@ -6,10 +6,21 @@ import type { Endpoint, EndpointCreated } from '../types'
 const field =
   'mono w-full rounded-md border border-[var(--line-soft)] bg-[var(--paper)] px-3 py-1.5 text-sm text-[var(--ink)] placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)] focus:outline-none'
 
+// The contract's length limits (docs/api.md, POST /v1/endpoints). The server stays
+// the authority; these only let the form name the wrong field before a round trip.
+const NAME_MAX = 100
+const URL_MAX = 2048
+
 // Addresses by number: loopback, 0.0.0.0, the three private IPv4 ranges, CGNAT,
-// link-local, and IPv6 loopback.
+// link-local, IPv6 loopback, IPv6 unique-local (fc00::/7) and IPv6 link-local
+// (fe80::/10). The URL parser hands IPv6 hosts back bracketed, so the brackets are
+// optional in the pattern rather than stripped beforehand.
 const PRIVATE_ADDRESS =
-  /^(localhost$|127\.|0\.0\.0\.0$|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[?::1\]?$)/i
+  /^(localhost$|127\.|0\.0\.0\.0$|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:|\[?fe[89ab][0-9a-f]:)/i
+
+// An IPv4 literal is four numbers; an IPv6 literal arrives bracketed. Neither is a
+// host name, so the "looks like a name" rule must not be applied to them.
+const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/
 
 // Addresses by name. Inside the cluster nothing is reached by number: the API is
 // kubernetes.default.svc.cluster.local and Postgres is postgres.relay.svc…, so a
@@ -17,18 +28,28 @@ const PRIVATE_ADDRESS =
 // answers to a name too (metadata.google.internal).
 const INTERNAL_NAME = /(^|\.)(local|internal|localdomain)$|(^|\.)svc(\.|$)/i
 
-// What counts as an endpoint URL we are willing to POST to.
+// A helpful form check, not SSRF protection. Worth being exact about the difference:
+// the real check is server-side (step 3.2), run after the name is resolved and again
+// before every delivery attempt, and it also blocks our own VPS address, which this
+// one does not. This check runs in the browser, so it can be skipped entirely by
+// calling the API directly, and it only sees the host name — a public name whose DNS
+// points at 127.0.0.1 passes here. What it buys is a clear message on the field
+// instead of a bare 422, and one less round trip.
 //
-// This is a security rule, not a tidiness one. A worker runs inside the cluster,
-// so an endpoint pointing at a private address would have us fetch something the
-// customer could never reach from outside: the Kubernetes API, Postgres, /metrics.
-// That is SSRF, and the firewall cannot stop it, because the call comes from within.
-// The API rejects the same URLs with 422 invalid_endpoint_url; this check only
-// saves a round trip and gives a clearer message.
+// The SSRF risk it mirrors: a worker runs inside the cluster, so an endpoint pointing
+// at a private address would have us fetch something the customer could never reach
+// from outside (the Kubernetes API, Postgres, /metrics). The firewall cannot stop
+// that, because the call comes from within.
 function checkUrl(raw: string): string | null {
+  const trimmed = raw.trim()
+
+  // Before parsing: a 4000-character string can still be a valid URL, and the
+  // contract's limit is on the characters, not on what they parse to.
+  if (trimmed.length > URL_MAX) return `The URL can be at most ${URL_MAX} characters`
+
   let parsed: URL
   try {
-    parsed = new URL(raw.trim())
+    parsed = new URL(trimmed)
   } catch {
     return 'Enter a full URL, for example https://example.com/hooks/relay'
   }
@@ -39,7 +60,14 @@ function checkUrl(raw: string): string | null {
   if (PRIVATE_ADDRESS.test(host) || INTERNAL_NAME.test(host)) {
     return 'The URL must not point at a private or internal address'
   }
-  if (!host.includes('.') || host.endsWith('.')) return 'That host name does not look reachable'
+
+  // Only host names have to look like names. A public IP literal is a legitimate
+  // endpoint, and an IPv6 one has no dots at all — [2001:db8::1] used to be refused
+  // by the dot rule below.
+  const isLiteral = (host.startsWith('[') && host.endsWith(']')) || IPV4_LITERAL.test(host)
+  if (!isLiteral && (!host.includes('.') || host.endsWith('.'))) {
+    return 'That host name does not look reachable'
+  }
 
   return null
 }
@@ -58,7 +86,12 @@ export default function Endpoints() {
   function add(e: FormEvent) {
     e.preventDefault()
 
-    if (!name.trim()) return setError('Give the endpoint a name.')
+    const trimmedName = name.trim()
+    if (!trimmedName) return setError('Give the endpoint a name.')
+    if (trimmedName.length > NAME_MAX) {
+      return setError(`The name can be at most ${NAME_MAX} characters`)
+    }
+
     const urlError = checkUrl(url)
     if (urlError) return setError(urlError)
 
@@ -67,7 +100,7 @@ export default function Endpoints() {
     // row we add must look like a list row. Keeping `signing_secret` in `rows` would
     // leave it in memory for the whole session, long after the box is dismissed.
     const { signing_secret: _secret, ...row } = endpointCreated
-    const created = { ...row, id: crypto.randomUUID(), name: name.trim(), url: url.trim() }
+    const created = { ...row, id: crypto.randomUUID(), name: trimmedName, url: url.trim() }
 
     setRows([...rows, created])
     setSecret({ ...created, signing_secret: endpointCreated.signing_secret })

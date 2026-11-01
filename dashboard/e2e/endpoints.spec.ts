@@ -69,6 +69,11 @@ const refused = [
   ['https://kubernetes.default.svc.cluster.local/hook', 'the Kubernetes API by name', PRIVATE],
   ['https://postgres.relay.svc.cluster.local:5432/hook', 'Postgres by name', PRIVATE],
   ['https://metadata.google.internal/token', 'cloud metadata by name', PRIVATE],
+  // IPv6, which the host-name rule used to decide: these have no dots, so they fell
+  // through to "does not look reachable" instead of being named as private.
+  ['https://[::1]/hook', 'IPv6 loopback', PRIVATE],
+  ['https://[fd00::1]/hook', 'an IPv6 unique-local address', PRIVATE],
+  ['https://[fe80::1]/hook', 'an IPv6 link-local address', PRIVATE],
 ] as const
 
 for (const [url, why, message] of refused) {
@@ -91,6 +96,10 @@ for (const url of [
   'https://example.com/hooks/relay',
   'https://my-app.localhost.example.com/hook',
   'https://sub.domain.co.uk/x',
+  // Public IP literals are legitimate endpoints. The IPv6 one is why the dot rule
+  // had to stop applying to literals: [2001:db8::1] contains no dot at all.
+  'https://93.184.216.34/hook',
+  'https://[2001:db8::1]/hook',
 ]) {
   test(`accepts ${url}`, async ({ page }) => {
     await page.getByLabel('Name').fill('Good one')
@@ -100,3 +109,39 @@ for (const url of [
     await expect(page.locator('tbody tr')).toHaveCount(START + 1)
   })
 }
+
+// The contract's length limits: name 1–100, URL at most 2048 characters
+// (docs/api.md, POST /v1/endpoints). Both sides of each boundary, in one test, so a
+// rule that refuses everything cannot pass as a rule that refuses what it should.
+test('a name is accepted at 100 characters and refused at 101', async ({ page }) => {
+  await page.getByLabel('URL').fill('https://example.com/hooks/limits')
+
+  await page.getByLabel('Name').fill('n'.repeat(101))
+  await page.getByRole('button', { name: 'Add endpoint' }).click()
+  await expect(page.locator('form p')).toHaveText(/at most 100 characters/)
+  await expect(page.locator('tbody tr')).toHaveCount(START)
+
+  await page.getByLabel('Name').fill('n'.repeat(100))
+  await page.getByRole('button', { name: 'Add endpoint' }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(START + 1)
+})
+
+test('a URL is accepted at 2048 characters and refused at 2049', async ({ page }) => {
+  const base = 'https://example.com/'
+  const ofLength = (total: number) => base + 'a'.repeat(total - base.length)
+
+  await page.getByLabel('Name').fill('Long URL')
+
+  const tooLong = ofLength(2049)
+  expect(tooLong).toHaveLength(2049) // the test's own arithmetic, checked
+  await page.getByLabel('URL').fill(tooLong)
+  await page.getByRole('button', { name: 'Add endpoint' }).click()
+  await expect(page.locator('form p')).toHaveText(/at most 2048 characters/)
+  await expect(page.locator('tbody tr')).toHaveCount(START)
+
+  const justFits = ofLength(2048)
+  expect(justFits).toHaveLength(2048)
+  await page.getByLabel('URL').fill(justFits)
+  await page.getByRole('button', { name: 'Add endpoint' }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(START + 1)
+})
