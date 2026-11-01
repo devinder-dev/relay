@@ -85,7 +85,9 @@ spec:
                 secretKeyRef:
                   name: postgres-auth
                   key: password
-            - name: RELAY_DB_PASSWORD           # read once, by the first-start script
+            # Read by the first-start script, and it stays in the pod's env on purpose: section 6b
+            # of infra/server/README.md reads it again (\getenv) to reset a lost Secret's password.
+            - name: RELAY_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: relay-db

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A throwaway Postgres for the tests, the same on the laptop and in CI (step 2.6b).
-# The same image as production (its digest is read from k8s/data/postgres.yaml) and the same
+# The same image as production (postgres-image.sh reads it from k8s/data/postgres.yaml) and the same
 # first-start script, so the tests log in as "relay", never as the superuser.
 #
 #   up    start a fresh one on 127.0.0.1:55432, wait until it answers, then run the migrations
@@ -29,13 +29,6 @@ ours() { [ "$(docker container inspect -f "{{index .Config.Labels \"$LABEL_KEY\"
 running() { [ "$(docker container inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = "true" ]; }
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
 
-# The image production runs, pinned by digest. One source of truth: the StatefulSet.
-prod_image() {
-  local image
-  image=$(sed -n 's/^ *image: *\(postgres:[^ ]*\).*/\1/p' "$REPO_DIR/k8s/data/postgres.yaml" | head -n 1)
-  [[ "$image" =~ ^postgres:[0-9.]+@sha256:[0-9a-f]{64}$ ]] || fail "couldn't read a pinned postgres image from k8s/data/postgres.yaml"
-  echo "$image"
-}
 
 remove_ours() {
   ours || fail "a container named $NAME exists but this script didn't make it, so it's left alone"
@@ -55,11 +48,15 @@ up() {
 
   # Step 3: start it, with the first-start script mounted read-only.
   port_busy && fail "port $PORT on 127.0.0.1 is already in use by something else"
+  # Production's image, pinned by digest, from the one script that reads it (the CI smoke test
+  # uses the same one). On its own line, so a missing digest stops here with its own message.
+  local image
+  image=$(bash "$API_DIR/scripts/postgres-image.sh")
   docker run --detach --name "$NAME" --label "$LABEL_KEY=1" \
     --publish "127.0.0.1:$PORT:5432" \
     --env POSTGRES_PASSWORD="$PASSWORD" --env RELAY_DB_PASSWORD="$PASSWORD" \
     --volume "$INITDB_DIR:/docker-entrypoint-initdb.d:ro" \
-    "$(prod_image)" >/dev/null
+    "$image" >/dev/null
   echo "test-db: started $NAME on 127.0.0.1:$PORT"
 
   # Step 4: wait for the real server. During the first start a temporary server listens on
