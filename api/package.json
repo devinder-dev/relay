@@ -6,8 +6,12 @@
     "dev": "bun --watch src/server.ts",
     "start": "bun src/server.ts",
     "test": "bun test",
+    "test:unit": "bun test src",
+    "test:db": "bash scripts/test-db.sh test",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "dbmate --wait --wait-timeout 60s --no-dump-schema --migration-lock --migration-lock-timeout 30s migrate"
+    "db:migrate": "dbmate --wait --wait-timeout 60s --no-dump-schema --migration-lock --migration-lock-timeout 30s migrate",
+    "db:up": "bash scripts/test-db.sh up",
+    "db:down": "bash scripts/test-db.sh down"
   },
   "dependencies": {
     "dbmate": "2.37.0",

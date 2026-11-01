@@ -40,7 +40,13 @@ jobs:
           bun-version-file: api/.bun-version
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      # A throwaway Postgres: production's image and first-start script, then the migrations.
+      # Started with docker run, not a services: container: those start before checkout, so
+      # they can't mount the first-start script from the repo.
+      - name: Start the test database
+        run: bun run db:up
+      - name: Unit and integration tests (logged in as relay)
+        run: bun run test:db
 
   image:
     name: api-image
