@@ -1,7 +1,7 @@
 // The connection itself, against the real Postgres: who we are, which settings arrive, and what
 // happens when the login is wrong, a query hangs, or a connection is cut.
 import { afterAll, describe, expect, test } from "bun:test";
-import { waitForDatabase } from "../../src/db.ts";
+import { isDatabaseUnavailable, waitForDatabase } from "../../src/db.ts";
 import { DATABASE_URL, silentLog, testDb } from "./helpers.ts";
 
 const sql = testDb();
@@ -26,37 +26,49 @@ describe("the connection, against the real Postgres", () => {
     await waitForDatabase(sql, silentLog);
   });
 
-  test("a wrong password → waitForDatabase gives up at once with 28P01, no 60 s wait", async () => {
+  test("a wrong password → waitForDatabase gives up at the first answer with 28P01, no retry", async () => {
     const wrong = new URL(DATABASE_URL);
     wrong.password = `wrong-${crypto.randomUUID()}`;
-    const bad = testDb(wrong.toString());
-    const started = performance.now();
+    const bad = testDb({ url: wrong.toString() });
+    // No stopwatch (a slow runner would make it flaky): "no ⚠️ retry line" proves it didn't wait.
+    const warnings: string[] = [];
+    const log = { info: () => {}, warn: (_obj: object, msg: string) => warnings.push(msg) };
     try {
-      await expect(waitForDatabase(bad, silentLog)).rejects.toMatchObject({ code: "28P01" });
-      expect(performance.now() - started).toBeLessThan(2_000); // shorter than a single pause
+      await expect(waitForDatabase(bad, log)).rejects.toMatchObject({ code: "28P01" });
+      expect(warnings).toEqual([]);
     } finally {
       await bad.end({ timeout: 1 });
     }
   });
 
-  test("a stuck query is cancelled by statement_timeout after 5 s, with 57014", async () => {
-    const started = performance.now();
+  test("a stuck query is cancelled by statement_timeout, with 57014", async () => {
+    // pg_sleep(6) would succeed after 6 s; the 57014 error alone proves Postgres stopped it.
     await expect(sql`select pg_sleep(6)`).rejects.toMatchObject({ code: "57014" });
-    expect(performance.now() - started).toBeLessThan(5_900); // stopped at 5 s, not finished at 6
-  }, 10_000);
+  }, 15_000);
 
   test("a dropped connection comes back: the next query opens a new one", async () => {
-    const [before] = await sql`select pg_backend_pid() as pid`;
-    // A separate connection ends ours, as a Postgres restart or a cut network would. relay may
-    // end its own sessions without being a superuser. The 2 s = wait until it's really gone.
+    // A pool of exactly one connection, so a different pid can only mean a new connection.
+    const one = testDb({ poolMax: 1 });
     const other = testDb();
+    const pid = async () => (await one`select pg_backend_pid() as pid`)[0]!.pid as number;
     try {
-      const [result] = await other`select pg_terminate_backend(${before!.pid}, 2000) as ended`;
+      const before = await pid();
+      // The other pool ends ours, as a Postgres restart or a cut network would. relay may end
+      // its own sessions without being a superuser. The 2000 = wait until it's really gone.
+      const [result] = await other`select pg_terminate_backend(${before}, 2000) as ended`;
       expect(result!.ended).toBe(true);
+      // The client may not have noticed the cut yet, so one connection error is allowed (in
+      // production that request gets our 503). The query after it must work.
+      let after: number;
+      try {
+        after = await pid();
+      } catch (error) {
+        expect(isDatabaseUnavailable(error)).toBe(true);
+        after = await pid();
+      }
+      expect(after).not.toBe(before);
     } finally {
-      await other.end({ timeout: 1 });
+      await Promise.all([one.end({ timeout: 1 }), other.end({ timeout: 1 })]);
     }
-    const [after] = await sql`select pg_backend_pid() as pid`;
-    expect(after!.pid).not.toBe(before!.pid);
   });
 });

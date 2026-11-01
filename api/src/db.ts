@@ -36,20 +36,23 @@ export function createDb(config: Config): Sql {
 // means "not there yet", so it's worth trying again.
 export const FATAL_STARTUP_CODES = new Set(["28P01", "28000", "3D000"]);
 
-// One try: `select 1`, cut short after timeoutMs. connect_timeout only limits connecting; this
-// also covers a server that accepted the connection and then stopped answering. On timeout the
-// query is cancelled too, so it doesn't keep running in the background.
+// One try: `select 1`, given up after timeoutMs. connect_timeout only limits connecting; this
+// also covers a server that accepted the connection and then stopped answering.
+// On timeout the try is abandoned, NOT cancelled. postgres.js 3.4.9's cancel() sends the cancel
+// over a new connection and drops that request's promise, so when the database is stuck
+// (exactly when we'd cancel) its failure would go uncaught and could crash the API.
+// Promise.race still handles the abandoned query's late answer or error. If the database stays
+// stuck, the API exits at the deadline, and that closes every connection anyway.
 export async function pingDatabase(sql: Sql, timeoutMs = 5_000): Promise<void> {
-  const query = sql`select 1`;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      query.cancel?.(); // postgres.js has cancel(); a test's fake may not
-      reject(Object.assign(new Error(`no answer within ${timeoutMs} ms`), { code: "PING_TIMEOUT" }));
-    }, timeoutMs);
+    timer = setTimeout(
+      () => reject(Object.assign(new Error(`no answer within ${timeoutMs} ms`), { code: "PING_TIMEOUT" })),
+      timeoutMs,
+    );
   });
   try {
-    await Promise.race([query, timeout]);
+    await Promise.race([sql`select 1`, timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -69,7 +72,7 @@ export async function waitForDatabase(sql: Sql, log: Log, options: WaitOptions =
   const {
     deadlineMs = 60_000,
     pauseMs = 2_000,
-    now = () => Date.now(),
+    now = () => performance.now(), // only moves forward; Date.now() jumps if the clock is set
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   } = options;
 
@@ -108,19 +111,30 @@ const UNAVAILABLE_CODES = new Set([
   "CONNECTION_ENDED", // postgres.js: a query arrived after the pool was closed (shutdown)
   "ECONNREFUSED", // Node: nothing listens on the port (Postgres down or restarting)
   "ECONNRESET", // Node: the connection was cut
+  "EPIPE", // Node: wrote to a connection that was already closed
   "ETIMEDOUT", // Node: the network didn't answer
+  "EHOSTUNREACH", // Node: no route to the database host
+  "ENETUNREACH", // Node: no route to its network
   "ENOTFOUND", // Node: the host name doesn't resolve (yet)
   "EAI_AGAIN", // Node: DNS lookup failed for now
   "57P01", // Postgres: the server is shutting down
+  "57P02", // Postgres: the server crashed and is restarting
   "57P03", // Postgres: the server is still starting up
   "53300", // Postgres: too many connections right now
+  // SQLSTATE class 08, "connection exception", by name:
+  "08000", // connection exception
+  "08001", // the client couldn't establish the connection
+  "08003", // the connection doesn't exist
+  "08004", // the server refused the connection
+  "08006", // connection failure
 ]);
-// Not in the list on purpose: 57014, "cancelled by statement_timeout". A query that runs over
-// 5 s is far more likely our slow SQL than an outage, so it stays a 500 and shows up as a bug.
+// Not in the list on purpose, so they stay a 500:
+//   57014  a query was cancelled (by statement_timeout): far more likely our slow SQL than an outage
+//   08P01  protocol violation: a bug in the driver or in Postgres, not "the database is down"
+//   08007  "did the commit happen? unknown". 503 means "try again", which could save it twice
+// Every one of them must show up as a bug, never hide as an outage.
 
 export function isDatabaseUnavailable(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
-  if (typeof code !== "string") return false;
-  // SQLSTATE class 08 = "connection exception" (for example 08006: connection failure)
-  return UNAVAILABLE_CODES.has(code) || code.startsWith("08");
+  return typeof code === "string" && UNAVAILABLE_CODES.has(code);
 }

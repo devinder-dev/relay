@@ -1,7 +1,7 @@
 // Unit tests for db.ts: no real database. A fake "sql" answers from a script (ok, or an error
 // code), and a fake clock lets 60 seconds of retries pass in a few milliseconds.
 import { describe, expect, test } from "bun:test";
-import { isDatabaseUnavailable, waitForDatabase, type Log, type Sql } from "./db.ts";
+import { isDatabaseUnavailable, pingDatabase, waitForDatabase, type Log, type Sql } from "./db.ts";
 
 type Outcome = "ok" | string; // "ok", or the error code the database "throws"
 
@@ -112,16 +112,31 @@ describe("waitForDatabase", () => {
   });
 });
 
+describe("pingDatabase", () => {
+  test("a try that times out is abandoned, and its late error is still handled (no crash)", async () => {
+    // The database answers with an error only after the try has given up.
+    const sql = (() =>
+      new Promise((_, reject) =>
+        setTimeout(() => reject(Object.assign(new Error("late"), { code: "ECONNRESET" })), 30),
+      )) as unknown as Sql;
+    await expect(pingDatabase(sql, 10)).rejects.toMatchObject({ code: "PING_TIMEOUT" });
+    // Let the late error arrive: bun test fails the whole run on an uncaught one.
+    await Bun.sleep(50);
+  });
+});
+
 describe("isDatabaseUnavailable", () => {
   test("connection problems → true (they become 503)", () => {
-    for (const code of ["ECONNREFUSED", "CONNECT_TIMEOUT", "CONNECTION_CLOSED", "57P03", "08006"]) {
+    for (const code of ["ECONNREFUSED", "CONNECT_TIMEOUT", "CONNECTION_CLOSED", "EPIPE", "EHOSTUNREACH", "57P02", "57P03", "08001", "08006"]) {
       expect(isDatabaseUnavailable({ code })).toBe(true);
     }
   });
 
   test("everything else → false (it stays a 500: our bug, not an outage)", () => {
-    // 23505 duplicate key, 42P01 no such table, 57014 cancelled by statement_timeout (slow SQL)
-    for (const error of [{ code: "23505" }, { code: "42P01" }, { code: "57014" }, new Error("boom"), null, undefined, "text"]) {
+    // 23505 duplicate key, 42P01 no such table, 57014 cancelled (slow SQL), 08P01 protocol
+    // violation (a driver bug), 08007 commit result unknown ("try again" could save it twice)
+    const notOutages = [{ code: "23505" }, { code: "42P01" }, { code: "57014" }, { code: "08P01" }, { code: "08007" }];
+    for (const error of [...notOutages, new Error("boom"), null, undefined, "text"]) {
       expect(isDatabaseUnavailable(error)).toBe(false);
     }
   });

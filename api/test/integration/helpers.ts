@@ -14,9 +14,11 @@ if (!url) {
 }
 export const DATABASE_URL: string = url;
 
-// A pool with production's own settings (createDb), exactly as the API uses it.
-export function testDb(databaseUrl: string = DATABASE_URL): Sql {
-  return createDb(loadConfig({ DATABASE_URL: databaseUrl }));
+// A pool with production's own settings (createDb), exactly as the API uses it. A test can
+// change the URL (a wrong password) or the pool size (exactly one connection).
+export function testDb(options: { url?: string; poolMax?: number } = {}): Sql {
+  const { url: databaseUrl = DATABASE_URL, poolMax = 5 } = options;
+  return createDb(loadConfig({ DATABASE_URL: databaseUrl, DB_POOL_MAX: String(poolMax) }));
 }
 
 export const silentLog: Log = { info: () => {}, warn: () => {} };

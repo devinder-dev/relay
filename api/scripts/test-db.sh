@@ -3,7 +3,7 @@
 # The same image as production (its digest is read from k8s/data/postgres.yaml) and the same
 # first-start script, so the tests log in as "relay", never as the superuser.
 #
-#   up    start it on 127.0.0.1:55432, wait until it answers, then run the migrations
+#   up    start a fresh one on 127.0.0.1:55432, wait until it answers, then run the migrations
 #   test  run every test (unit + integration) against it; extra arguments go to bun test
 #   down  remove it: only the container this script made, which carries our label
 #
@@ -45,26 +45,22 @@ remove_ours() {
 up() {
   docker info >/dev/null 2>&1 || fail "Docker isn't running"
 
-  # Step 2: reuse ours if it's running; never touch anything else.
+  # Step 2: always start fresh. An old container of ours may have an older image, an older
+  # first-start script or other ports, so it's removed first (only ours: remove_ours checks
+  # the label). It costs a few seconds and rules all of that out.
   if exists; then
-    if running && ours; then
-      echo "test-db: $NAME is already running, reusing it"
-    else
-      echo "test-db: $NAME exists but isn't running, removing it first"
-      remove_ours
-    fi
+    echo "test-db: removing the old $NAME first, so the new one matches production's setup"
+    remove_ours
   fi
 
   # Step 3: start it, with the first-start script mounted read-only.
-  if ! exists; then
-    port_busy && fail "port $PORT on 127.0.0.1 is already in use by something else"
-    docker run --detach --name "$NAME" --label "$LABEL_KEY=1" \
-      --publish "127.0.0.1:$PORT:5432" \
-      --env POSTGRES_PASSWORD="$PASSWORD" --env RELAY_DB_PASSWORD="$PASSWORD" \
-      --volume "$INITDB_DIR:/docker-entrypoint-initdb.d:ro" \
-      "$(prod_image)" >/dev/null
-    echo "test-db: started $NAME on 127.0.0.1:$PORT"
-  fi
+  port_busy && fail "port $PORT on 127.0.0.1 is already in use by something else"
+  docker run --detach --name "$NAME" --label "$LABEL_KEY=1" \
+    --publish "127.0.0.1:$PORT:5432" \
+    --env POSTGRES_PASSWORD="$PASSWORD" --env RELAY_DB_PASSWORD="$PASSWORD" \
+    --volume "$INITDB_DIR:/docker-entrypoint-initdb.d:ro" \
+    "$(prod_image)" >/dev/null
+  echo "test-db: started $NAME on 127.0.0.1:$PORT"
 
   # Step 4: wait for the real server. During the first start a temporary server listens on
   # the socket only, so asking over TCP (-h 127.0.0.1) only succeeds once that's finished.

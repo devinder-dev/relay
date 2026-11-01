@@ -38,10 +38,12 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault            # the container runtime's default syscall filter
-      # After SIGTERM, Kubernetes waits this long, then sends SIGKILL. 30 s is the default,
-      # written out because our shutdown must fit inside it: 5 s preStop (below), then running
-      # requests finish (milliseconds for the API), then the database pool closes (sql.end,
-      # at most 5 s). Phase 4's worker needs more: its webhook calls may take 10 s.
+      # From the moment a pod is told to stop, Kubernetes allows this long IN TOTAL, then sends
+      # SIGKILL. The 5 s preStop (below) runs first, inside these 30 s; only then comes SIGTERM.
+      # So server.ts has the remaining ~25 s: running requests finish (milliseconds for today's
+      # routes; later routes must fit too), then the database pool closes (sql.end, at most
+      # 5 s). 30 s is the default, written out because of that budget. Phase 4's worker needs
+      # more: its webhook calls may take 10 s.
       terminationGracePeriodSeconds: 30
       containers:
         - name: api

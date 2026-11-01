@@ -9,6 +9,9 @@ afterAll(() => sql.end({ timeout: 5 }));
 
 type Seed = { ownerId: string; endpointId: string; eventId: string; deliveryId: string };
 
+// A Postgres text[] literal with n event types, for example '{t1,t2}'.
+const eventTypes = (n: number) => `{${Array.from({ length: n }, (_, i) => `t${i + 1}`).join(",")}}`;
+
 // One valid row in every table, so a case can point at rows that exist.
 async function seed(tx: Tx): Promise<Seed> {
   const [owner] = await tx`insert into owners (name) values ('Test owner') returning id`;
@@ -64,6 +67,34 @@ describe("schema v1 accepts valid rows (positive controls)", () => {
         values (${other!.id}, 'order.created', ${tx.json({})}, 'key-1')`;
     });
   });
+
+  test("the limits themselves are accepted: 20 event types, a 255-character idempotency key", async () => {
+    // The positive controls for the "21" and "256" cases below: they prove those are refused
+    // because of the limit, not because something else in the row is wrong.
+    await inRollback(sql, async (tx) => {
+      const { ownerId } = await seed(tx);
+      await tx`
+        insert into endpoints (owner_id, name, url, signing_secret, event_types)
+        values (${ownerId}, 'x', 'https://example.com/hook', 'whsec_x', ${eventTypes(20)})`;
+      await tx`
+        insert into events (owner_id, type, payload, idempotency_key)
+        values (${ownerId}, 'a.b', ${tx.json({})}, ${"k".repeat(255)})`;
+    });
+  });
+
+  test("deleting an owner deletes everything that belongs to it (ON DELETE CASCADE)", async () => {
+    await inRollback(sql, async (tx) => {
+      const ids = await seed(tx);
+      await tx`delete from owners where id = ${ids.ownerId}`;
+      const [left] = await tx`
+        select (select count(*) from api_keys   where owner_id = ${ids.ownerId})::int as api_keys,
+               (select count(*) from endpoints  where owner_id = ${ids.ownerId})::int as endpoints,
+               (select count(*) from events     where owner_id = ${ids.ownerId})::int as events,
+               (select count(*) from deliveries where owner_id = ${ids.ownerId})::int as deliveries,
+               (select count(*) from attempts   where delivery_id = ${ids.deliveryId})::int as attempts`;
+      expect(left).toEqual({ api_keys: 0, endpoints: 0, events: 0, deliveries: 0, attempts: 0 });
+    });
+  });
 });
 
 // Each case: what it is, the SQLSTATE the database must answer, and the query. It runs after
@@ -113,6 +144,37 @@ const refused: Case[] = [
     sqlstate: "23503",
     query: (sql, ids) => sql`insert into attempts (delivery_id, started_at, duration_ms, status_code) values ('00000000-0000-0000-0000-000000000000', now(), 100, 200)`,
   },
+  // Added after the review of #26: one case per remaining rule in migration 001.
+  {
+    what: "a second delivery of the same event to the same endpoint (the fan-out must not double)",
+    sqlstate: "23505",
+    query: (sql, ids) => sql`insert into deliveries (owner_id, event_id, endpoint_id) values (${ids.ownerId}, ${ids.eventId}, ${ids.endpointId})`,
+  },
+  {
+    what: "an API key with a hash that already exists",
+    sqlstate: "23505",
+    query: (sql, ids) => sql`insert into api_keys (owner_id, prefix, key_hash) values (${ids.ownerId}, 'relay_live_copy', sha256(convert_to('relay_live_test_full_key', 'UTF8')))`,
+  },
+  {
+    what: "an event without a type (a required value missing)",
+    sqlstate: "23502",
+    query: (sql, ids) => sql`insert into events (owner_id, payload) values (${ids.ownerId}, ${sql.json({})})`,
+  },
+  {
+    what: "an endpoint with 0 event types",
+    sqlstate: "23514",
+    query: (sql, ids) => sql`insert into endpoints (owner_id, name, url, signing_secret, event_types) values (${ids.ownerId}, 'x', 'https://example.com/hook', 'whsec_x', '{}')`,
+  },
+  {
+    what: "an endpoint with 21 event types (the limit is 20)",
+    sqlstate: "23514",
+    query: (sql, ids) => sql`insert into endpoints (owner_id, name, url, signing_secret, event_types) values (${ids.ownerId}, 'x', 'https://example.com/hook', 'whsec_x', ${eventTypes(21)})`,
+  },
+  {
+    what: "an idempotency key of 256 characters (the limit is 255)",
+    sqlstate: "23514",
+    query: (sql, ids) => sql`insert into events (owner_id, type, payload, idempotency_key) values (${ids.ownerId}, 'a.b', ${sql.json({})}, ${"k".repeat(256)})`,
+  },
 ];
 
 describe("schema v1 refuses what breaks its rules, each with the right SQLSTATE", () => {
@@ -125,9 +187,9 @@ describe("schema v1 refuses what breaks its rules, each with the right SQLSTATE"
     });
   }
 
-  test("the list covers every kind of rule: CHECK, UNIQUE and foreign key", () => {
+  test("the list covers every kind of rule: CHECK, UNIQUE, foreign key and NOT NULL", () => {
     const kinds = new Set(refused.map((c) => c.sqlstate));
-    for (const sqlstate of ["23514", "23505", "23503"]) {
+    for (const sqlstate of ["23514", "23505", "23503", "23502"]) {
       expect(kinds.has(sqlstate)).toBe(true);
     }
   });
