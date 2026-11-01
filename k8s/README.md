@@ -4,7 +4,8 @@ How each folder gets onto the cluster, and who may apply it.
 
 | Folder | What's in it | Applied by |
 |---|---|---|
-| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account and the Service policy for `relay` | One of us, by hand, after the PR is reviewed |
+| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay` and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
+| `k8s/data/` (from step 2.3) | Postgres: its Service and StatefulSet (`postgres.yaml`) and its first-start script (`initdb/`). Later also the backup CronJob (Phase 6) | One of us, by hand, after the PR is reviewed. **Never the pipeline**: the `deployer` account can't create StatefulSets or Secrets, so a merged PR can't change the database's version or its disk. Order and recovery: [`infra/server/README.md`](../infra/server/README.md), section 6 |
 | `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
 
 ## Rules
@@ -37,6 +38,14 @@ How each folder gets onto the cluster, and who may apply it.
   - **Services stay inside the cluster** (`relay-service-policy.yaml`): only type ClusterIP
     (headless included), never `externalIPs`. ufw can't filter ports that Kubernetes
     publishes, so nothing in `relay`, and above all Postgres, may publish one.
+  - **What the guards don't cover**, on purpose, so we know it rather than find out:
+    1. The Service policy only sees **Services**. A Traefik `IngressRouteTCP` could publish
+       a TCP port without one. We have none, and only an admin could create one.
+    2. Both guards only cover **`relay`**. A NodePort Service in another namespace, pointed at
+       a `relay` pod's IP by hand, would still reach that pod from outside.
+
+    The `deployer` account can do neither: it is confined to `relay` and has no rights on
+    Traefik's own objects. Both need an admin doing it deliberately.
 - **The issuers' challenge Services are ClusterIP** (`cluster-issuers.yaml`). cert-manager's
   default is NodePort, which the Service policy would refuse in `relay`. Apply the issuers
   before the policy.

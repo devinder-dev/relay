@@ -1,0 +1,22 @@
+# A second recipe for disks (step 2.1). Identical to k3s's own "local-path", except for one
+# clause: when a disk's claim (PVC) is deleted, by mistake or by deleting namespace relay,
+# the data folder is kept instead of deleted. Postgres asks for this class by name (step 2.3).
+#
+# Why not just change local-path? Its reclaimPolicy can't be changed ("field is immutable"),
+# and k3s re-applies its own copy when it restarts. Not the default class on purpose: the
+# throwaway data of later tools (Prometheus, Loki) shouldn't be kept forever.
+#
+# The cost of Retain: a kept ("Released") disk is never reused or cleaned up by itself. One of
+# us re-attaches it or deletes it on purpose (k8s/README.md). It protects against kubectl
+# mistakes, not against losing the server's disk: only backups do that (Phase 6).
+#
+# Cluster-wide, so it's a platform file, applied by hand by one of us.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path-retain
+provisioner: rancher.io/local-path        # the same program that makes local-path's folders
+reclaimPolicy: Retain                     # claim deleted → the PV becomes "Released", the folder stays
+volumeBindingMode: WaitForFirstConsumer   # make the folder once the pod's node is known
+# No size limit here: local-path ignores the requested size, so a disk can grow until the
+# server's disk is full. Disk usage is watched in Phase 7.
