@@ -5,6 +5,7 @@ import { clock } from '../format'
 import {
   deliveredDeliveryDetail,
   deliveryDetail,
+  endpointDeletedDetail,
   pendingDeliveryDetail,
   recoveredDeliveryDetail,
   replayResponse,
@@ -18,12 +19,16 @@ import type { DeliveryDetail as Detail } from '../types'
 // over and the server remembers instead.
 const replayed = new Map<string, Detail>()
 
-// One fixture per row in the log, so every row in the log opens.
+// One fixture per row in the log, so every row in the log opens. This list and
+// `deliveries.data` in mocks.ts have to stay the same length: a row without a
+// fixture here opens "Delivery not found", which is how the deleted-endpoint row
+// broke when it arrived from #7.
 const fixtures = [
   pendingDeliveryDetail,
   deliveryDetail,
   deliveredDeliveryDetail,
   recoveredDeliveryDetail,
+  endpointDeletedDetail,
 ]
 
 // Stands in for GET /v1/deliveries/:id until the API exists. A replayed delivery
@@ -96,7 +101,15 @@ export default function DeliveryDetail() {
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="mono text-xl font-medium">{delivery.event.type}</h1>
         <StatusPill status={delivery.status} />
-        {delivery.status !== 'delivered' && (
+        {/* A delivered delivery has nothing to retry, and the contract refuses a
+            replay whose endpoint was deleted with 409 endpoint_deleted. Showing a
+            button that can only fail is worse than showing why it is gone. A
+            pending delivery keeps its button: replaying it means "try now". */}
+        {delivery.status === 'delivered' ? null : delivery.last_error === 'endpoint_deleted' ? (
+          <p className="ml-auto text-xs text-[var(--ink-dim)]">
+            Its endpoint was deleted, so this cannot be replayed.
+          </p>
+        ) : (
           <button
             onClick={replay}
             className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
