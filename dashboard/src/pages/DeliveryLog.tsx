@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import StatusPill from '../components/StatusPill'
 import { clock } from '../format'
-import { deliveries } from '../mocks'
+import { listDeliveries } from '../mockStore'
 import type { DeliveryStatus } from '../types'
 
 type Filter = DeliveryStatus | 'all'
@@ -12,10 +12,12 @@ const filters: Filter[] = ['all', 'pending', 'delivered', 'dead']
 export default function DeliveryLog() {
   const [filter, setFilter] = useState<Filter>('all')
 
-  const rows =
-    filter === 'all'
-      ? deliveries.data
-      : deliveries.data.filter((d) => d.status === filter)
+  // Read once per mount, from the same store the detail screen writes to. React
+  // Router mounts this screen again every time you come back to it, so a replay
+  // made on the detail screen is here when you return.
+  const [page] = useState(listDeliveries)
+
+  const rows = filter === 'all' ? page.data : page.data.filter((d) => d.status === filter)
 
   return (
     <div className="flex flex-col gap-5">

@@ -2,41 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import StatusPill from '../components/StatusPill'
 import { clock } from '../format'
-import {
-  deliveredDeliveryDetail,
-  deliveryDetail,
-  endpointDeletedDetail,
-  pendingDeliveryDetail,
-  recoveredDeliveryDetail,
-  replayResponse,
-} from '../mocks'
-import type { DeliveryDetail as Detail } from '../types'
-
-// Stands in for the server's memory. A real API writes the replay to the database
-// and hands back the new state on the next GET; these fixtures are frozen, so this
-// holds what replay changed. Keyed by id, because replaying one delivery must not
-// make the screen forget another. It goes away in phase 5.3, when src/api.ts takes
-// over and the server remembers instead.
-const replayed = new Map<string, Detail>()
-
-// One fixture per row in the log, so every row in the log opens. This list and
-// `deliveries.data` in mocks.ts have to stay the same length: a row without a
-// fixture here opens "Delivery not found", which is how the deleted-endpoint row
-// broke when it arrived from #7.
-const fixtures = [
-  pendingDeliveryDetail,
-  deliveryDetail,
-  deliveredDeliveryDetail,
-  recoveredDeliveryDetail,
-  endpointDeletedDetail,
-]
-
-// Stands in for GET /v1/deliveries/:id until the API exists. A replayed delivery
-// wins over the fixture it came from, or the 2 s reload would hand back the old row.
-function load(id: string | undefined): Detail | null {
-  if (!id) return null
-  return replayed.get(id) ?? fixtures.find((d) => d.id === id) ?? null
-}
+import { getDelivery, replayDelivery } from '../mockStore'
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -49,7 +15,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export default function DeliveryDetail() {
   const { id } = useParams()
-  const [delivery, setDelivery] = useState(() => load(id))
+  const [delivery, setDelivery] = useState(() => getDelivery(id))
 
   // A pending delivery is waiting for its next try, so the screen reloads itself
   // until it is not pending any more. Nothing is started for a delivery that is
@@ -58,7 +24,7 @@ export default function DeliveryDetail() {
   useEffect(() => {
     if (delivery?.status !== 'pending') return
 
-    const timer = setInterval(() => setDelivery(load(id)), 2000)
+    const timer = setInterval(() => setDelivery(getDelivery(id)), 2000)
 
     return () => clearInterval(timer)
   }, [delivery?.status, id])
@@ -74,22 +40,11 @@ export default function DeliveryDetail() {
     )
   }
 
-  // Replay answers with a Delivery, not a DeliveryDetail, so take only the four
-  // fields it changes. Spreading the whole answer would replace `event` with the
-  // short version and lose the payload.
-  //
-  // The result is written twice on purpose: to `replayed` so the reload finds it,
-  // and to state so the screen updates now. ADR 0002: "Replay triggers one reload."
+  // The store does the work, so the log sees the replay too. ADR 0002: "Replay
+  // triggers one reload" - the answer is put on screen now, and the 2 s poll then
+  // reads the same store rather than handing back the old row.
   function replay() {
-    const next: Detail = {
-      ...delivery!,
-      status: replayResponse.status,
-      attempts: replayResponse.attempts,
-      next_attempt_at: replayResponse.next_attempt_at,
-      last_error: replayResponse.last_error,
-    }
-    replayed.set(next.id, next)
-    setDelivery(next)
+    setDelivery(replayDelivery(delivery!.id))
   }
 
   return (

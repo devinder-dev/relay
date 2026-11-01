@@ -99,6 +99,31 @@ test('the deleted-endpoint delivery opens and explains why Replay is gone', asyn
   await expect(page.getByText(/endpoint was deleted/i)).toBeVisible()
 })
 
+test('a replay is still there in the log and on the way back', async ({ page }) => {
+  // Before the shared store, replay only touched the detail screen's own Map: the
+  // log kept saying dead/8 while the detail said pending/0, and the two disagreed
+  // for the rest of the session. One source now, so this walks all three steps:
+  // detail → log → detail.
+  await openRow(page, 'payment.failed')
+  await expect(page.getByTestId('status')).toHaveText('dead')
+
+  await page.getByRole('button', { name: 'Replay' }).click()
+  await expect(page.getByTestId('status')).toHaveText('pending')
+
+  // The log: the row must have followed, both its status and its attempt count.
+  await page.getByRole('link', { name: '← Back to the log' }).click()
+  const row = page.locator('tbody tr', { hasText: 'payment.failed' })
+  await expect(row.getByTestId('status')).toHaveText('pending')
+  await expect(row).toContainText('0')
+
+  // And back in again, to be sure it was stored and not just rendered once. Waiting
+  // for the back link first, like openFirst does: the address changes before the DOM
+  // does, so asserting on the status straight after the click reads the log's five.
+  await row.getByRole('link').click()
+  await expect(page.getByRole('link', { name: '← Back to the log' })).toBeVisible()
+  await expect(page.getByTestId('status')).toHaveText('pending')
+})
+
 test('an id that does not exist says so', async ({ page }) => {
   // The positive control for the test above: "Delivery not found" has to still
   // appear for a real miss, or that assertion proves nothing.

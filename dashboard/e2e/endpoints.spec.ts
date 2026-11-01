@@ -113,6 +113,27 @@ for (const url of [
 // The contract's length limits: name 1–100, URL at most 2048 characters
 // (docs/api.md, POST /v1/endpoints). Both sides of each boundary, in one test, so a
 // rule that refuses everything cannot pass as a rule that refuses what it should.
+test('an added endpoint is still there after leaving the screen', async ({ page }) => {
+  // The rows used to live in this screen's own useState, so navigating away threw
+  // the new endpoint away. Only in-app navigation counts here: page.goto() reloads
+  // the page, which restarts the mock store and would hide the bug.
+  await page.getByLabel('Name').fill('Survives navigation')
+  await page.getByLabel('URL').fill('https://example.com/hooks/survives')
+  await page.getByRole('button', { name: 'Add endpoint' }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(START + 1)
+
+  await page.getByRole('link', { name: 'Delivery log' }).click()
+  await expect(page.getByRole('heading', { name: 'Delivery log' })).toBeVisible()
+
+  await page.getByRole('link', { name: 'Endpoints' }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(START + 1)
+  await expect(page.getByRole('cell', { name: 'Survives navigation' })).toBeVisible()
+
+  // The secret must not come back with it: it is shown once, and the stored row
+  // never held it.
+  await expect(page.getByText(/^whsec_/)).toBeHidden()
+})
+
 test('a name is accepted at 100 characters and refused at 101', async ({ page }) => {
   await page.getByLabel('URL').fill('https://example.com/hooks/limits')
 

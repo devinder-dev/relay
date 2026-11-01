@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import StatusPill from '../components/StatusPill'
-import { endpointCreated, endpoints } from '../mocks'
+import { addEndpoint, listEndpoints } from '../mockStore'
 import type { Endpoint, EndpointCreated } from '../types'
 
 const field =
@@ -73,7 +73,9 @@ function checkUrl(raw: string): string | null {
 }
 
 export default function Endpoints() {
-  const [rows, setRows] = useState<Endpoint[]>(endpoints.data)
+  // From the store, not the fixture, so an endpoint added earlier in the session is
+  // still listed after navigating away and coming back.
+  const [rows, setRows] = useState<Endpoint[]>(listEndpoints)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -95,15 +97,14 @@ export default function Endpoints() {
     const urlError = checkUrl(url)
     if (urlError) return setError(urlError)
 
-    // The row and the secret are split on purpose. The API answers POST /v1/endpoints
-    // with the secret included, but the list it later returns never has one, so the
-    // row we add must look like a list row. Keeping `signing_secret` in `rows` would
-    // leave it in memory for the whole session, long after the box is dismissed.
-    const { signing_secret: _secret, ...row } = endpointCreated
-    const created = { ...row, id: crypto.randomUUID(), name: trimmedName, url: url.trim() }
+    // The store keeps the row without the secret, the way the API's list does, and
+    // hands the secret back here to be shown once. Reading the list back from the
+    // store rather than appending to local state is what makes the new endpoint
+    // still be here after navigating away and returning.
+    const created = addEndpoint(trimmedName, url.trim())
 
-    setRows([...rows, created])
-    setSecret({ ...created, signing_secret: endpointCreated.signing_secret })
+    setRows(listEndpoints())
+    setSecret(created)
     setName('')
     setUrl('')
     setError(null)
