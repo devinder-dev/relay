@@ -60,16 +60,67 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build (and on main, push) the image
+      # Every PR and every merge: build the image into the runner's own Docker, so it can be
+      # tested before anything is pushed.
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: api
           platforms: linux/amd64 # the VPS is amd64; GitHub's runners build that natively
           build-args: GIT_SHA=${{ github.sha }}
-          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
-          push: ${{ github.event_name == 'push' }}
+          tags: relay-api:smoke
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Run the migrations with the image just built, the way the migrate Job runs them
+      # (uid 1000, read-only root, no capabilities, its 128 MiB limit), against a throwaway
+      # Postgres made by our own first-start script. A dbmate that can't start in the real
+      # image is found here, on the PR, instead of halfway through a deploy.
+      - name: Smoke-test the migrations inside the image
+        shell: bash # GitHub then adds -e and pipefail
+        run: |
+          # Production's image, read from k8s/data/postgres.yaml (one source of truth). On its own
+          # line, so a missing digest stops the step here with a clear message.
+          PG_IMAGE=$(bash api/scripts/postgres-image.sh)
+          docker network create smoke-net
+          docker run -d --name smoke-pg --network smoke-net \
+            -e POSTGRES_PASSWORD=test -e RELAY_DB_PASSWORD=test \
+            -v "$PWD/k8s/data/initdb:/docker-entrypoint-initdb.d:ro" \
+            "$PG_IMAGE"
+          for _ in $(seq 1 60); do
+            docker exec smoke-pg pg_isready -q -h 127.0.0.1 -U postgres && break
+            sleep 1
+          done
+          migrate() {
+            docker run --rm --network smoke-net --read-only --user 1000:1000 --cap-drop ALL --memory 128m \
+              -e DATABASE_URL='postgres://relay:test@smoke-pg:5432/relay?sslmode=disable' \
+              relay-api:smoke bun run --bun db:migrate
+          }
+          echo "--- first run: applies every migration"
+          migrate
+          echo "--- second run: must find nothing to do"
+          migrate
+          tables=$(docker exec smoke-pg psql -X -U postgres -d relay -Atc \
+            "select count(*) from pg_tables where schemaname = 'public' and tablename in
+             ('owners', 'api_keys', 'endpoints', 'events', 'deliveries', 'attempts')")
+          if [ "$tables" != 6 ]; then
+            echo "::error::expected the 6 tables of schema v1, found $tables"
+            exit 1
+          fi
+          docker exec smoke-pg psql -X -U postgres -d relay -Atc \
+            "select version from schema_migrations order by version" | sed 's/^/applied: /'
+      # Only after a merge to main: push the same image. Its layers come from the build above
+      # (the builder's cache), so this takes seconds and pushes what was just tested.
+      - name: Push the image (main only)
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: api
+          platforms: linux/amd64
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/relay-api:${{ github.sha }}
+          push: true
+          cache-from: type=gha
 
   deploy-script:
     name: deploy-script-test
@@ -81,8 +132,8 @@ jobs:
       # with fake git and kubectl (no server needed). shellcheck ships on GitHub's runner.
       - name: Test relay-deploy's decisions
         run: bash infra/server/test-relay-deploy.sh infra/server/relay-deploy.sh
-      - name: Lint the server scripts
-        run: shellcheck infra/server/*.sh
+      - name: Lint the shell scripts
+        run: shellcheck infra/server/*.sh api/scripts/*.sh
 
   deploy:
     name: deploy
@@ -94,10 +145,12 @@ jobs:
       name: production
       url: https://api.myrelay.tech
     permissions: {} # needs no GitHub access at all: it only talks to our server
-    # Budget for two Deployments: 15 min lock + 6 min rollout + 9 min public check = 30 min.
-    # Failure path: 15 min lock + 6 min rollout + 6 min rollback = 27 min; no public check.
-    # Allow 5 extra minutes above the longer path for SSH, git, kubectl and job overhead.
-    timeout-minutes: 35
+    # Budget for two Deployments, each deploy starting with the migrate Job (about 3 min at most):
+    #   success: 15 min lock + 3 migrate + 6 rollout + 9 public check      = 33 min
+    #   failure: 15 min lock + (3 + 6) deploy + (3 + 6) rollback, no check = 33 min
+    # Plus 5 minutes for SSH, git, kubectl and job overhead. When the worker (a third
+    # Deployment) arrives in Phase 4, its failure path is 39 + 5 minutes: raise this to 45.
+    timeout-minutes: 40
     steps:
       - name: Deploy the commit over SSH
         # Values arrive as environment variables, never pasted into the command itself.

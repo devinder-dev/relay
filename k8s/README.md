@@ -6,6 +6,7 @@ How each folder gets onto the cluster, and who may apply it.
 |---|---|---|
 | `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay` and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
 | `k8s/data/` (from step 2.3) | Postgres: its Service and StatefulSet (`postgres.yaml`) and its first-start script (`initdb/`). Later also the backup CronJob (Phase 6) | One of us, by hand, after the PR is reviewed. **Never the pipeline**: the `deployer` account can't create StatefulSets or Secrets, so a merged PR can't change the database's version or its disk. Order and recovery: [`infra/server/README.md`](../infra/server/README.md), section 6 |
+| `k8s/migrate/` (from step 2.4) | The migrate Job: runs the commit's database migrations (dbmate) once per deploy | Only `relay-deploy`, with `kubectl create` (never `apply`: every deploy gets a fresh Job name), **before** `k8s/app/`. Kubernetes deletes finished Jobs after 1 hour, because the `deployer` account can't delete |
 | `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
 
 ## Rules

@@ -24,24 +24,64 @@ case "\$*" in
 esac
 exit 0
 EOF
-  # kubectl: apply notes that it ran and prints one Deployment (or fails if apply-fails exists);
-  # rollout status fails when the checked-out commit is listed in "broken";
-  # get (pods, events) prints a line, as the real one would.
+  # kubectl: every call's first word goes to "calls", so tests can check the order.
+  # apply notes that it ran, and for which commit (applied-commits), and prints one Deployment
+  # (or fails if apply-fails exists); rollout status fails when the checked-out commit is
+  # listed in "broken".
+  # create (the migrate Job) reads the commit from the Job's label and answers
+  # job.batch/migrate-<first 5 characters>, or is refused when create-fails exists.
+  # get <that job> answers the Job's true conditions: "SuccessCriteriaMet Complete" unless
+  # job-state-<5 characters> says otherwise (an empty file = no verdict yet), or fails when
+  # get-job-fails exists. logs prints a line. get (pods, events) prints a line, as the real one.
   cat > "$T/bin/kubectl" <<EOF
 #!/usr/bin/env bash
+echo "\$1" >> "$T/calls"
+job=""; for a in "\$@"; do case "\$a" in *migrate-*) job="\${a##*/}" ;; esac; done
 case "\$*" in
-  apply*) cat > /dev/null; touch "$T/applied"; [ -e "$T/apply-fails" ] && exit 1; echo deployment.apps/relay-api ;;
+  apply*) cat > /dev/null; touch "$T/applied"; cat "$T/checked-out" >> "$T/applied-commits"
+          [ -e "$T/apply-fails" ] && exit 1; echo deployment.apps/relay-api ;;
   "rollout status"*) grep -qx "\$(cat "$T/checked-out")" "$T/broken" && exit 1; exit 0 ;;
-  get*) echo "fake kubectl \$*" ;;
+  create*) commit=\$(sed -n 's/.*relay.myrelay.tech\/commit: "\([0-9a-f]*\)".*/\1/p')
+           [ -e "$T/create-fails" ] && { echo 'Error from server (Forbidden): jobs.batch is forbidden' >&2; exit 1; }
+           echo "job.batch/migrate-\${commit:0:5}" ;;
+  get*) if [ -n "\$job" ]; then
+          [ -e "$T/get-job-fails" ] && { echo "Unable to connect to the server: i/o timeout" >&2; exit 1; }
+          if [ -e "$T/job-state-\${job#migrate-}" ]; then cat "$T/job-state-\${job#migrate-}"
+          else echo "SuccessCriteriaMet Complete"; fi
+        else echo "fake kubectl \$*"; fi ;;
+  logs*) echo "fake migrate log of \$job" ;;
 esac
 EOF
   # flock: gets the lock, unless lock-busy exists (another deploy holds it the whole time).
   printf '#!/usr/bin/env bash\n[ -e "%s/lock-busy" ] && exit 1\nexit 0\n' "$T" > "$T/bin/flock"
+  # sleep: returns at once, so a "wait for the Job" loop runs its tries in milliseconds.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$T/bin/sleep"
   chmod +x "$T/bin/"*
   : > "$T/broken"
 }
 
-run() { SSH_ORIGINAL_COMMAND="$1" PATH="$T/bin:$PATH" bash "$T/relay-deploy" > "$T/out" 2>&1; echo $?; }
+# The same fake world, plus a migrate Job in the commit (k8s/migrate/job.yaml, from Phase 2).
+setup_migrate() {
+  setup
+  mkdir -p "$T/home/relay/k8s/migrate"
+  printf 'kind: Job\nmetadata:\n  labels:\n    relay.myrelay.tech/commit: "__GIT_SHA__"\n' \
+    > "$T/home/relay/k8s/migrate/job.yaml"
+}
+
+# Runs the script with the fakes first in PATH, and prints its exit code. A watchdog stops it
+# after 30 s, so a script that hangs (for example a wait loop that never ends) fails the test
+# instead of hanging CI. The watchdog uses the real sleep: only the script's PATH has the fake.
+run() {
+  SSH_ORIGINAL_COMMAND="$1" PATH="$T/bin:$PATH" bash "$T/relay-deploy" > "$T/out" 2>&1 &
+  local pid=$! tenths=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$tenths" -ge 300 ]; then
+      kill "$pid"; echo "(the watchdog stopped the script after 30 s: it hung)" >> "$T/out"; break
+    fi
+    sleep 0.1; tenths=$((tenths + 1))
+  done
+  wait "$pid"; echo $?
+}
 
 check() { # check "<name>" "<actual>" "<expected>"
   if [ "$2" = "$3" ]; then passed=$((passed + 1)); echo "  ok    $1"
@@ -104,6 +144,52 @@ setup; touch "$T/lock-busy"; code=$(run $GOOD)
 check "exits 1" "$code" 1
 check "says to re-run" "$(grep -q 're-run this job' "$T/out" && echo yes || echo no)" yes
 check "changes nothing" "$(exists "$T/checked-out")" no
+
+# From Phase 2 a commit can carry a migrate Job, which must finish before anything is applied.
+order() { grep -xE 'create|apply' "$T/calls" 2>/dev/null | tr '\n' ' '; }
+applied_bad() { grep -qx $BAD "$T/applied-commits" 2>/dev/null && echo yes || echo no; }
+
+echo "11. The migrate Job completes"
+setup_migrate; code=$(run $GOOD)
+check "exits 0" "$code" 0
+check "migrates before it applies" "$(order)" "create apply "
+check "says which Job" "$(grep -q 'migrating with job.batch/migrate-aaaaa' "$T/out" && echo yes || echo no)" yes
+
+echo "12. The migrate Job fails"
+setup_migrate; echo $GOOD > "$T/home/.relay-last-good"; printf 'FailureTarget Failed' > "$T/job-state-bbbbb"
+code=$(run $BAD)
+check "exits 1" "$code" 1
+check "never applies the failing commit" "$(applied_bad)" no
+check "deploys the last good commit again" "$(cat "$T/applied-commits" 2>/dev/null)" $GOOD
+check "last good stays the same" "$(cat "$T/home/.relay-last-good")" $GOOD
+
+echo "13. A commit without k8s/migrate/ (from before Phase 2)"
+setup; code=$(run $GOOD)
+check "exits 0" "$code" 0
+check "creates no Job" "$(grep -cx create "$T/calls")" 0
+check "still applies" "$(exists "$T/applied")" yes
+
+echo "14. Creating the Job is refused (for example the Role lacks jobs)"
+setup_migrate; echo $GOOD > "$T/home/.relay-last-good"; touch "$T/create-fails"; code=$(run $BAD)
+check "exits 1" "$code" 1
+check "never applies the failing commit" "$(applied_bad)" no
+
+echo "15. The Job never reaches a verdict (it stays Pending)"
+setup_migrate; : > "$T/job-state-bbbbb"; code=$(run $BAD)
+check "exits 1" "$code" 1
+check "never applies the failing commit" "$(applied_bad)" no
+check "says the Job may still be running" "$(grep -q 'may still be running' "$T/out" && echo yes || echo no)" yes
+
+echo "16. A failed Job shows why in the log"
+setup_migrate; printf 'FailureTarget Failed' > "$T/job-state-bbbbb"; code=$(run $BAD)
+check "prints the Job's log" "$(grep -q 'fake migrate log of migrate-bbbbb' "$T/out" && echo yes || echo no)" yes
+check "prints the pods" "$(grep -q -- '--- pods' "$T/out" && echo yes || echo no)" yes
+check "prints the latest events" "$(grep -q -- '--- latest events' "$T/out" && echo yes || echo no)" yes
+
+echo "17. Reading the Job's state fails (no connection)"
+setup_migrate; echo $GOOD > "$T/home/.relay-last-good"; touch "$T/get-job-fails"; code=$(run $BAD)
+check "exits 1, never success" "$code" 1
+check "never applies the failing commit" "$(applied_bad)" no
 
 echo; echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

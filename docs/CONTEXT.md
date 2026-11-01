@@ -72,7 +72,7 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
 **Data model v1** (Postgres 18.6, every id is a UUIDv7):
 `owners` (id, name) · `api_keys` (owner_id, prefix, key_hash = SHA-256 UNIQUE, revoked_at) ·
 `endpoints` (owner_id, name, url, signing_secret `whsec_…`, event_types[] default `{*}`,
-disabled_at) · `events` (owner_id, type, payload jsonb object, idempotency_key; UNIQUE (owner_id,
+deleted_at = soft delete) · `events` (owner_id, type, payload jsonb object, idempotency_key; UNIQUE (owner_id,
 idempotency_key)) · `deliveries` (owner_id, event_id, endpoint_id, status pending|delivered|dead,
 attempts, next_attempt_at, lease_id, last_status_code, last_error, delivered_at; UNIQUE (event_id,
 endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `attempts`
@@ -96,7 +96,7 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 | Web framework | **Fastify 5** ([decision 0001](decisions/0001-web-framework-fastify.md)): `buildApp()` + `listen({ host: "0.0.0.0" })`, pino logs, Zod validation, `@fastify/cors`, `inject()` tests | Hono (native on Bun, but new to us), Express, Elysia |
 | Database library | postgres.js behind one file `src/db.ts` | `Bun.sql` (ties the data layer to the new runtime), Drizzle |
 | API code structure | **Zod 4** for bodies, queries and env vars ([decision 0003](decisions/0003-api-code-structure.md)); layers routes → services → repositories; one Fastify error handler with one error shape; small files, one job each | Fastify JSON Schema, `fastify-type-provider-zod`, logic in route handlers |
-| Migrations | dbmate (plain SQL), run by a Kubernetes Job before each rollout. Expand/contract rule | drizzle-kit, an initContainer (would rerun on every scale-up) |
+| Migrations | dbmate (plain SQL, `api/db/migrations/`, inside the API image), run by the migrate Job (`k8s/migrate/`) that `relay-deploy` creates before each rollout. Forward-only, expand/contract ([decision 0006](decisions/0006-migrations-expand-contract.md)) | drizzle-kit, an initContainer (would rerun on every scale-up), `down` migrations on rollback |
 | Unit + integration tests | `bun test`; integration against a real Postgres (Docker locally, service container in GitHub Actions) | Testcontainers (no official Bun support), mocked DB |
 | Dashboard | **Vite + React + TypeScript, Tailwind CSS v4, React Router, axios** (one client in `src/api.ts`), plain React state with a small refresh loop while a delivery is pending, served by nginx ([decision 0002](decisions/0002-dashboard-stack.md)) | Next.js, plain CSS, `fetch`, TanStack Query |
 | E2E tests | Playwright, runs on Node in the dashboard folder | Cypress |
