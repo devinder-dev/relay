@@ -13,8 +13,24 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+/**
+ * Reads the id from the route and gives the screen below it that id as its React key.
+ *
+ * Without the key, going from one delivery to another is the same route pattern, so React
+ * keeps the same component instance: `useState`'s initializer never runs again and the screen
+ * keeps showing the previous delivery. The key makes the id the screen's identity, so a
+ * different id is a different screen - which also restarts the 2 s poll from scratch.
+ *
+ * Latent today: nothing links one detail screen to another, so there is no way to reach it by
+ * clicking, and typing a URL reloads the page and remounts anyway. It is here so that adding a
+ * "next delivery" link later can't quietly bring the bug with it.
+ */
 export default function DeliveryDetail() {
   const { id } = useParams()
+  return <Screen key={id} id={id} />
+}
+
+function Screen({ id }: { id: string | undefined }) {
   const [delivery, setDelivery] = useState(() => getDelivery(id))
 
   // A pending delivery is waiting for its next try, so the screen reloads itself
