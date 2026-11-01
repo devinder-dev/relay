@@ -59,6 +59,7 @@ Code never builds error responses itself. It throws, and **one** Fastify error h
 | `ZodError` | 422 `validation_failed`, with the fields that were wrong |
 | Our own `AppError` (for example `notFound`, `conflict`) | Its own status and code (404 `not_found`, 409 `already_delivered`, …) |
 | Fastify's own client errors | Their status: 400 bad JSON, 413 body too large, 415 not JSON |
+| The database can't be reached (`isDatabaseUnavailable` in `db.ts`; added in Phase 2, step 2.6) | Logged as a warning, answered as 503 `service_unavailable` with `Retry-After: 5` |
 | Anything else | Logged in full, answered as 500 `internal_error` with no details |
 
 ### Files

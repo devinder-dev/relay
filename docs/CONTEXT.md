@@ -81,7 +81,7 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 **API v1:** `GET /v1/me` · `POST /v1/endpoints` (returns the signing secret once) ·
 `GET /v1/endpoints` · `DELETE /v1/endpoints/:id` (soft delete) · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
-`GET /health/ready` (checks DB, 503 while shutting down) · `GET /version` (git SHA) ·
+`GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
 `/metrics` on port 9090 only. Errors: `{"error":{"code","message","request_id"}}`. Another
 owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech` only.
 Owners and API keys are created with a `create-owner` script (no signup page).
@@ -94,10 +94,10 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 |---|---|---|
 | Runtime | Bun **1.4.4**, pinned everywhere (laptop, CI, Docker). 1.4 is a new rewrite in Rust | Node (more common, but we know Bun; it stays our fallback) |
 | Web framework | **Fastify 5** ([decision 0001](decisions/0001-web-framework-fastify.md)): `buildApp()` + `listen({ host: "0.0.0.0" })`, pino logs, Zod validation, `@fastify/cors`, `inject()` tests | Hono (native on Bun, but new to us), Express, Elysia |
-| Database library | postgres.js behind one file `src/db.ts` | `Bun.sql` (ties the data layer to the new runtime), Drizzle |
+| Database library | postgres.js 3.4.9 behind one file `src/db.ts`: pool 5 per pod, 5 s `statement_timeout`; the API waits for the database before it listens, and answers 503 `service_unavailable` while it can't reach it | `Bun.sql` (ties the data layer to the new runtime), Drizzle |
 | API code structure | **Zod 4** for bodies, queries and env vars ([decision 0003](decisions/0003-api-code-structure.md)); layers routes → services → repositories; one Fastify error handler with one error shape; small files, one job each | Fastify JSON Schema, `fastify-type-provider-zod`, logic in route handlers |
 | Migrations | dbmate (plain SQL, `api/db/migrations/`, inside the API image), run by the migrate Job (`k8s/migrate/`) that `relay-deploy` creates before each rollout. Forward-only, expand/contract ([decision 0006](decisions/0006-migrations-expand-contract.md)) | drizzle-kit, an initContainer (would rerun on every scale-up), `down` migrations on rollback |
-| Unit + integration tests | `bun test`; integration against a real Postgres (Docker locally, service container in GitHub Actions) | Testcontainers (no official Bun support), mocked DB |
+| Unit + integration tests | `bun test`; integration tests against a real Postgres, logged in as `relay`: the same throwaway container (production's image and first-start script) on the laptop and in GitHub Actions (`bun run db:up`, then `bun run test:db`) | Testcontainers (no official Bun support), mocked DB |
 | Dashboard | **Vite + React + TypeScript, Tailwind CSS v4, React Router, axios** (one client in `src/api.ts`), plain React state with a small refresh loop while a delivery is pending, served by nginx ([decision 0002](decisions/0002-dashboard-stack.md)) | Next.js, plain CSS, `fetch`, TanStack Query |
 | E2E tests | Playwright, runs on Node in the dashboard folder | Cypress |
 | Queue | Postgres `SKIP LOCKED` + lease with fencing token | RabbitMQ (stretch goal only, as a "doorbell"; dual-write problem) |
