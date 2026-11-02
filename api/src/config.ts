@@ -21,6 +21,22 @@ const Env = z.object({
    LOG_LEVEL: z
   .enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
+  // Where Postgres is, with the login and password in it. Required: without a database the
+  // API can't do its job, so a missing value stops it at once instead of at the first request.
+  // In Kubernetes it comes from the Secret relay-db (key url), never from a file in git.
+  DATABASE_URL: z
+    .string()
+    .refine((s) => s.startsWith("postgres://") || s.startsWith("postgresql://"), {
+      message: "must be a postgres:// URL",
+    }),
+
+  // How many connections this pod may hold open. 5 is plenty for one pod with 100m CPU, and
+  // keeps every pod together under Postgres's max_connections (the budget in the Phase 2 plan).
+  DB_POOL_MAX: z
+    .string()
+    .transform((s) => Number(s))
+    .refine((n) => Number.isInteger(n) && n >= 1 && n <= 20, { message: "must be a whole number between 1 and 20" })
+    .default(5),
 
 });
 

@@ -3,7 +3,10 @@ import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 
 // A config made from a fixed object, so the test never depends on this machine's environment.
-const app = buildApp(loadConfig({ GIT_SHA: "abc123" }), { logger: false });
+// DATABASE_URL is required but harmless here: these tests never connect to it.
+const app = buildApp(loadConfig({ GIT_SHA: "abc123", DATABASE_URL: "postgres://test@localhost/test" }), {
+  logger: false,
+});
 afterAll(() => app.close());
 
 describe("health routes", () => {

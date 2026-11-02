@@ -38,14 +38,42 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault            # the container runtime's default syscall filter
+      # From the moment a pod is told to stop, Kubernetes allows this long IN TOTAL, then sends
+      # SIGKILL. The 5 s preStop (below) runs first, inside these 30 s; only then comes SIGTERM.
+      # So server.ts has the remaining ~25 s: running requests finish (milliseconds for today's
+      # routes; later routes must fit too), then the database pool closes (sql.end, at most
+      # 5 s). 30 s is the default, written out because of that budget. Phase 4's worker needs
+      # more: its webhook calls may take 10 s.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: api
           image: ghcr.io/devinder-dev/relay-api:__GIT_SHA__
           ports:
             - name: http                  # probes, the Service and the Ingress use this name
               containerPort: 8080
+          # Where Postgres is, with the relay login in it: straight from the Secret relay-db
+          # (made on the server by bootstrap-secrets.sh), never written in git. If the Secret
+          # is missing, the pod can't start, so the rollout fails and relay-deploy rolls back.
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: relay-db
+                  key: url
+          # startup: "has it finished starting?" Runs first, alone; liveness and readiness wait
+          # until it has passed once. 45 × 2 s = 90 s: more than the API's own 60 s wait for
+          # the database, so the API gives up first, with a clear log line, instead of being
+          # killed by the probe in the middle of a retry.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 45
           # readiness: "may this pod get traffic?" No → out of the Service, but kept running.
-          # liveness: "is it alive?" No, 3 times → restarted. Never checks the database.
+          # liveness: "is it alive?" No, 3 times → restarted.
+          # Neither checks the database: one database blip would take every pod out at once.
+          # The API waits for the database before it listens instead (server.ts).
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -56,8 +84,7 @@ spec:
             httpGet:
               path: /health/live
               port: http
-            initialDelaySeconds: 15
-            periodSeconds: 20
+            periodSeconds: 20                 # no initialDelaySeconds: the startupProbe covers the start
             failureThreshold: 3
 
           # Before SIGTERM, wait 5 s, so Traefik stops sending this pod traffic first.

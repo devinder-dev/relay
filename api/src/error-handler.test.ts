@@ -4,7 +4,8 @@ import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { conflict } from "./errors.ts";
 
-const app = buildApp(loadConfig({}), { logger: false });
+// A harmless database URL: these tests never connect to it.
+const app = buildApp(loadConfig({ DATABASE_URL: "postgres://test@localhost/test" }), { logger: false });
 
 // Test-only routes that fail on purpose, one for each kind of error.
 app.get("/test/zod", async () => z.object({ name: z.string() }).parse({}));
@@ -15,6 +16,13 @@ app.get("/test/crash", async () => {
   throw new Error("connection failed: password=hunter2");
 });
 app.post("/test/echo", async (request) => request.body);
+// What postgres.js throws when Postgres is down, and when our own SQL is wrong.
+app.get("/test/db-down", async () => {
+  throw Object.assign(new Error("connect ECONNREFUSED 10.43.0.5:5432"), { code: "ECONNREFUSED" });
+});
+app.get("/test/db-bug", async () => {
+  throw Object.assign(new Error('relation "nope" does not exist'), { code: "42P01" });
+});
 
 afterAll(() => app.close());
 
@@ -77,5 +85,20 @@ describe("error handler", () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().error.code).toBe("internal_error");
     expect(res.body).not.toContain("hunter2");
+  });
+
+  test("database unreachable → 503 service_unavailable with Retry-After, no address leaked", async () => {
+    const res = await app.inject({ method: "GET", url: "/test/db-down" });
+    expect(res.statusCode).toBe(503);
+    expect(res.headers["retry-after"]).toBe("5");
+    expect(res.json().error.code).toBe("service_unavailable");
+    expect(res.json().error.request_id).toBe(res.headers["x-request-id"]);
+    expect(res.body).not.toContain("10.43.0.5");
+  });
+
+  test("a database error that is our bug (no such table) → still 500, never hidden as an outage", async () => {
+    const res = await app.inject({ method: "GET", url: "/test/db-bug" });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe("internal_error");
   });
 });

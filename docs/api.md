@@ -47,6 +47,7 @@ A 422 also has `details`, one entry per problem:
 | 422 | `validation_failed` | Body or query fails the rules below (`details` lists why) |
 | 422 | `invalid_endpoint_url` | Endpoint URL that isn't `https`, or points to a private or internal address |
 | 500 | `internal_error` | Our bug. The message never contains internal details |
+| 503 | `service_unavailable` | The database can't be reached right now (a restart, a short blip). Comes with `Retry-After: 5`: try again after that |
 
 ### Pagination
 
@@ -154,7 +155,7 @@ Deleted endpoints aren't listed at all.
 | Route | Answer |
 |---|---|
 | `GET /health/live` | 200 `{ "status": "ok" }`. Never checks the database |
-| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down or when the database is unreachable. The shutdown 503 comes from Fastify: after `app.close()` every new request gets 503, and a pod that has stopped listening refuses the connection, which also counts as not ready |
+| `GET /health/ready` | 200 `{ "status": "ok" }`, or 503 while shutting down. Never checks the database: one database blip would take every pod out at once. The API waits for the database before it listens instead, and requests that need it during a blip get `503 service_unavailable`. The shutdown 503 comes from Fastify: after `app.close()` every new request gets 503, and a pod that has stopped listening refuses the connection, which also counts as not ready |
 | `GET /version` | 200 `{ "sha": "<git commit>" }` |
 
 ### `GET /v1/me`
