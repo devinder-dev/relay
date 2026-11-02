@@ -168,7 +168,28 @@ deployed by the pipeline, then checked from outside on `https://api.myrelay.tech
 The API runs as 2 pods with probes, a rolling update and graceful shutdown. Tested live:
 76,466 requests from 20 clients during a deploy, 0 failed; a deliberately failed deploy rolled
 back to the last good commit with 119,824 requests and 0 failed, and users never saw the bad
-version. The hello app is gone. Next: Phase 2, the database foundation.
+version. The hello app is gone.
+
+Phase 2 (database foundation) is live (1–2 Nov):
+- **Guards on namespace `relay`:** Pod Security `restricted`, and only ClusterIP Services.
+- **Postgres 18.6:** a StatefulSet on a disk that is kept even when its claim is deleted
+  (`local-path-retain`), applied by hand. The app logs in as `relay`, not a superuser.
+- **Migrations:** every deploy runs them first, in a migrate Job (dbmate, forward-only,
+  [decision 0006](decisions/0006-migrations-expand-contract.md)). Migration 001, schema v1, is
+  applied.
+- **The API connects:** it waits for the database before it listens, readiness never checks the
+  database, and an unreachable database answers 503 `service_unavailable`.
+- **Tests:** they run against a real Postgres, logged in as `relay`, on the laptop and in CI.
+
+Tested live:
+- **Deletion drill:** a marker row survived deleting the pod, the StatefulSet and the claim; the
+  same disk was re-attached.
+- **A migration that can't start** fails within its 150 s limit, so the deploy stops instead of
+  hanging.
+- **A rollback to Phase 1's release** (from before migrations existed) worked under load:
+  123,904 requests, 0 failed.
+
+Next: Phase 3, the core API.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
