@@ -1,0 +1,37 @@
+// Maps database rows to public delivery pages and delivery history.
+import type { Sql } from "../db.ts";
+import { notFound } from "../errors.ts";
+import * as repository from "../repositories/deliveries.ts";
+
+// Step 1: explicitly map public fields, including nullable values and ISO timestamps.
+function delivery(row: repository.DeliveryRow) {
+  return {
+    id: row.id, status: row.status, attempts: row.attempts,
+    next_attempt_at: row.next_attempt_at?.toISOString() ?? null,
+    last_status_code: row.last_status_code, last_error: row.last_error,
+    delivered_at: row.delivered_at?.toISOString() ?? null, created_at: row.created_at.toISOString(),
+    event: { id: row.event_id, type: row.event_type },
+    endpoint: { id: row.endpoint_id, name: row.endpoint_name },
+  };
+}
+export async function listDeliveries(sql: Sql, ownerId: string, filters: repository.DeliveryFilters) {
+  const rows = await repository.listDeliveries(sql, ownerId, filters);
+  const data = rows.slice(0, filters.limit).map(delivery);
+  return { data, next_cursor: rows.length > filters.limit ? data.at(-1)!.id : null };
+}
+
+// Step 2: a missing or foreign delivery has one answer; history never reveals secret fields.
+export async function getDelivery(sql: Sql, ownerId: string, id: string) {
+  const row = await repository.getDelivery(sql, ownerId, id);
+  if (!row) throw notFound("Delivery");
+  const attempts = await repository.listAttempts(sql, ownerId, id);
+  return {
+    ...delivery(row),
+    event: { id: row.event_id, type: row.event_type, payload: row.payload, created_at: row.event_created_at.toISOString() },
+    endpoint: { id: row.endpoint_id, name: row.endpoint_name, url: row.endpoint_url },
+    attempt_log: attempts.map((a) => ({
+      id: a.id, number: a.number, started_at: a.started_at.toISOString(), duration_ms: a.duration_ms,
+      status_code: a.status_code, error: a.error, response_excerpt: a.response_excerpt,
+    })),
+  };
+}

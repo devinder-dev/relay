@@ -53,7 +53,7 @@ A 422 also has `details`, one entry per problem:
 
 Lists that can grow use a **cursor**: `?limit=50&cursor=<id>` → `{ "data": [...], "next_cursor": "<id>" | null }`.
 Pass `next_cursor` as `cursor` to get the next page. `null` means there are no more pages.
-Newest first. `limit` is 1–100, default 50.
+Newest first. `limit` is a whole number written in digits, 1–100, default 50.
 
 ## Types
 
@@ -194,7 +194,7 @@ Deleting it again answers 404. Errors: 401, 404.
 
 ### `POST /v1/events`
 
-Header (optional): `Idempotency-Key: <up to 255 characters>`.
+Header (optional): `Idempotency-Key: <1–255 characters, no control characters>`.
 
 Body:
 
@@ -206,6 +206,10 @@ Body:
 202 → `EventAccepted`. The event and one delivery per matching endpoint are saved in one transaction;
 a matching endpoint lists this exact type or `"*"`. Sending the same `Idempotency-Key` again returns the
 first answer again, with the header `Idempotent-Replayed: true`, and creates nothing new.
+The key wins: the same key with a different body returns the first answer and saves nothing new.
+
+Send an `Idempotency-Key`. After a 503, a network error or a 500, retry with the same key:
+you get the original answer, or the event is created now. Without a key, a retry may create a second event.
 Errors: 401, 413, 415, 422.
 
 ### `GET /v1/deliveries`
@@ -216,7 +220,7 @@ Query: `status` (optional, a `DeliveryStatus`), `endpoint_id` (optional), `limit
 
 ### `GET /v1/deliveries/:id`
 
-200 → `DeliveryDetail`. Errors: 401, 404.
+200 → `DeliveryDetail`. A malformed delivery id also answers 404. Errors: 401, 404.
 
 ### `POST /v1/deliveries/:id/replay`
 
