@@ -46,6 +46,16 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 20
+          # Before SIGTERM, wait 5 s, so Traefik stops sending this pod traffic first.
+          # Removing a pod from the Service and telling it to stop happen at the same moment,
+          # but Traefik needs a moment to hear about the removal. Without this pause nginx is
+          # already shutting down while Traefik still routes here, and those requests fail.
+          # terminationGracePeriodSeconds stays at its default 30 s, which comfortably holds
+          # these 5 s: nginx serves static files, so it has nothing to drain afterwards.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           resources:
             # Serving static files needs almost nothing. The requests exist so the
             # scheduler knows this pod is cheap and leaves room for the database.
