@@ -9,6 +9,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: relay-dashboard
+  labels:
+    app.kubernetes.io/name: relay-dashboard
 spec:
   replicas: 2            # two pods, so a rollout always has one serving
   strategy:
@@ -18,11 +20,11 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: relay-dashboard
+      app.kubernetes.io/name: relay-dashboard   # manage the pods that carry this label...
   template:
     metadata:
       labels:
-        app: relay-dashboard
+        app.kubernetes.io/name: relay-dashboard # ...and give every new pod this label
     spec:
       containers:
         - name: nginx
@@ -86,7 +88,7 @@ metadata:
   name: relay-dashboard
 spec:
   selector:
-    app: relay-dashboard
+    app.kubernetes.io/name: relay-dashboard   # the label the Deployment gives its pods
   ports:
     - port: 80          # the Service listens on 80 inside the cluster...
       targetPort: 8080  # ...and forwards to 8080 in the pod
