@@ -8,7 +8,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dashboard
+  name: relay-dashboard
 spec:
   replicas: 2            # two pods, so a rollout always has one serving
   strategy:
@@ -18,17 +18,17 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app: dashboard
+      app: relay-dashboard
   template:
     metadata:
       labels:
-        app: dashboard
+        app: relay-dashboard
     spec:
       containers:
         - name: nginx
           # Tag is the git SHA, set by the pipeline. Never "latest": a rollback has
           # to name an exact build, and "latest" means something different tomorrow.
-          image: ghcr.io/devinder-dev/relay-dashboard:PLACEHOLDER_SHA
+          image: ghcr.io/devinder-dev/relay-dashboard:__GIT_SHA__
           ports:
             - containerPort: 8080
           readinessProbe:
@@ -73,10 +73,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: dashboard
+  name: relay-dashboard
 spec:
   selector:
-    app: dashboard
+    app: relay-dashboard
   ports:
     - port: 80          # the Service listens on 80 inside the cluster...
       targetPort: 8080  # ...and forwards to 8080 in the pod
@@ -84,7 +84,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: dashboard
+  name: relay-dashboard
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
@@ -101,6 +101,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: dashboard
+                name: relay-dashboard
                 port:
                   number: 80
