@@ -8,8 +8,8 @@ import { createDb, waitForDatabase } from "./db.ts";
 const config = loadConfig();
 
 // Step 2: the app and the database pool. The pool doesn't connect yet; the first query does.
-const app = buildApp(config);
 const sql = createDb(config);
+const app = buildApp(config, { sql });
 
 // When Kubernetes sends SIGTERM or Ctrl+C sends SIGINT: stop taking requests and let running
 // ones finish, then close the database connections (queries get 5 s), then exit.
