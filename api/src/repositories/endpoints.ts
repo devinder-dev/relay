@@ -10,8 +10,10 @@ export type EndpointRow = {
 export type ListedEndpoint = EndpointRow & { status: "active" | "failing" };
 
 // Step 1: creates of the same owner queue here; other owners do not wait.
+// NO KEY UPDATE, not UPDATE: we never change the owner's id, and FOR UPDATE would also make
+// every event insert of this owner wait (its foreign-key check takes FOR KEY SHARE).
 export async function lockOwner(tx: Tx, ownerId: string): Promise<void> {
-  await tx`SELECT 1 FROM owners WHERE id = ${ownerId} FOR UPDATE`;
+  await tx`SELECT 1 FROM owners WHERE id = ${ownerId} FOR NO KEY UPDATE`;
 }
 export async function countLiveEndpoints(tx: Tx, ownerId: string): Promise<number> {
   const [row] = await tx<{ count: number }[]>`

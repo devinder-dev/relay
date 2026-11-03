@@ -1,5 +1,6 @@
 // Checks endpoint limits with controlled database locks, without timing guesses.
 import { afterAll, expect, test } from "bun:test";
+import { lockOwner } from "../../src/repositories/endpoints.ts";
 import { endpointFixture } from "./endpoints-fixture.ts";
 import { testDb } from "./helpers.ts";
 
@@ -63,5 +64,17 @@ test("locking owner A still lets owner B create before the transaction ends", as
   await blocker.begin(async (tx) => {
     await tx`SELECT 1 FROM owners WHERE id = ${a.owner.id} FOR UPDATE`;
     expect((await f.post(b.key)).statusCode).toBe(201);
+  });
+}, 10_000);
+
+// Step 4: the owner lock queues endpoint creates only; that owner's events never wait for it.
+test("the owner lock of an endpoint create doesn't block the owner's event inserts", async () => {
+  const a = await f.owner();
+  await blocker.begin(async (tx) => {
+    await lockOwner(tx, a.owner.id);
+    await f.sql.begin(async (other) => {
+      await other`SET LOCAL lock_timeout = '1s'`;
+      await other`INSERT INTO events (owner_id, type, payload) VALUES (${a.owner.id}, 'test.lock', '{}'::jsonb)`;
+    });
   });
 }, 10_000);
