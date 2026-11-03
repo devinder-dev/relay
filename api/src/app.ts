@@ -2,6 +2,7 @@
 // It never listens on a port itself. server.ts does that, so tests can call
 // buildApp() and send fake requests with app.inject().
 import Fastify, { LogController, type FastifyInstance } from "fastify";
+import { realLookup, type Lookup } from "./ssrf.ts";
 import type { Sql } from "./db.ts";
 import { v1Routes } from "./routes/v1.ts";
 import type { Config } from "./config.ts";
@@ -10,7 +11,7 @@ import { healthRoutes } from "./routes/health.ts";
 
 export function buildApp(
   config: Config,
-  deps: { sql: Sql },
+  deps: { sql: Sql; lookup?: Lookup },
   options: { logger?: boolean; logStream?: { write(line: string): void } } = {},
 ): FastifyInstance {
   const app = Fastify({
@@ -42,7 +43,9 @@ export function buildApp(
 
   // Step 2: only the v1 plugin inherits the authentication hook.
   app.register(healthRoutes, { config });
-  app.register(v1Routes, { prefix: "/v1", sql: deps.sql });
+  app.register(v1Routes, {
+    prefix: "/v1", sql: deps.sql, lookup: deps.lookup ?? realLookup, allowOrigins: config.SSRF_ALLOW_ORIGINS,
+  });
 
   return app;
 }
