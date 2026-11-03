@@ -14,6 +14,7 @@
     "db:down": "bash scripts/test-db.sh down"
   },
   "dependencies": {
+    "@fastify/cors": "11.3.1",
     "dbmate": "2.37.0",
     "fastify": "5.12.7",
     "ipaddr.js": "2.5.0",
