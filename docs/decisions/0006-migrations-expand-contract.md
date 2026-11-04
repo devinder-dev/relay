@@ -1,6 +1,6 @@
 # 0006. Database migrations: forward-only, expand/contract
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-31
 - **Decided by:** Devinder Singh and Abdikhani Mohamed
 
