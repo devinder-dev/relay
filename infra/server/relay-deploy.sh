@@ -26,13 +26,14 @@ if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
   fail "invalid commit SHA: $SHA"
 fi
 
-# 2. One deploy at a time: a second deploy waits here for up to 15 minutes. That's longer
-#    than the worst case (deploy + rollback, 180 s per Deployment each). In CI this rarely
-#    waits at all, because the pipeline already runs main's deploys one after the other;
-#    it protects against an admin deploying by hand at the same moment.
-#    The lock is released by itself when the script ends, even if it crashes.
+# 2. One deploy at a time: a second deploy waits here for up to 30 minutes. The worst case is
+#    a deploy and then its rollback, each one migrate Job (up to 180 s) plus up to 180 s per
+#    Deployment: with the API and the dashboard about 18 minutes, with the worker (Phase 4)
+#    about 24. In CI this rarely waits at all, because the pipeline already runs main's
+#    deploys one after the other; it protects against an admin deploying by hand at the same
+#    moment. The lock is released by itself when the script ends, even if it crashes.
 exec 9>/home/deploy/.relay-deploy.lock
-flock --wait 900 9 || fail "another deploy is still running after 15 minutes: nothing was changed, re-run this job"
+flock --wait 1800 9 || fail "another deploy is still running after 30 minutes: nothing was changed, re-run this job"
 
 # 3. Gate 2: the commit must be on main, which means it was merged through a reviewed PR.
 git -C "$REPO" fetch --quiet origin main

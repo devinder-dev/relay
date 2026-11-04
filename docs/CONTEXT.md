@@ -48,14 +48,18 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
   (served on its own port 9090, which no Ingress points to).
 - Endpoint URLs from customers must not point to internal, private or our own VPS addresses
   (SSRF). Checked when an endpoint is created **and** before every delivery attempt; redirects
-  are never followed.
+  are never followed. **Known gap, closed in Phase 4: DNS rebinding.** A name can resolve to a
+  public address at the check and to a private one when the request is sent, so a second check
+  only narrows the window. The worker closes it by connecting only to the address it just
+  checked (Host and SNI kept), behind a NetworkPolicy. Nothing is sent before Phase 4.
 
 ## How Relay works
 
 1. A producer sends `POST /v1/events` with its API key (`Authorization: Bearer relay_live_…`).
 2. The API validates it and, in **one transaction**, saves the event plus one **delivery** row
    per matching endpoint (exact event type, or an endpoint listening to `*`), then answers
-   **202 Accepted**. A repeated `Idempotency-Key` returns the original answer.
+   **202 Accepted**. A repeated `Idempotency-Key` returns the original answer
+   ([decision 0007](decisions/0007-idempotency-unique-constraint.md)).
 3. Worker pods **claim** due deliveries with `FOR UPDATE SKIP LOCKED` and take a 60 s **lease**:
    `attempts + 1`, `next_attempt_at = now() + 60 s`, a fresh `lease_id`, commit. No transaction or
    connection is held during the HTTP call.
@@ -83,7 +87,7 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
 `GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
 `/metrics` on port 9090 only. Errors: `{"error":{"code","message","request_id"}}`. Another
-owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech` only.
+owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
 Owners and API keys are created with a `create-owner` script (no signup page).
 **The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
 Both the API and the dashboard follow it; changes to it go through a PR first.
