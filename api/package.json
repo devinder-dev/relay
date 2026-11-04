@@ -16,6 +16,7 @@
   "dependencies": {
     "dbmate": "2.37.0",
     "fastify": "5.12.7",
+    "ipaddr.js": "2.5.0",
     "postgres": "3.4.9",
     "zod": "4.6.7"
   },

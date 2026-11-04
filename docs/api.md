@@ -168,9 +168,14 @@ Body:
 
 | Field | Rule |
 |---|---|
-| `name` | string, 1–100 characters |
-| `url` | `https` URL, at most 2048 characters, must resolve only to public addresses |
+| `name` | string, 1–100 characters, no control characters |
+| `url` | `https` on the default port, no user name or password, no spaces or control characters, at most 2048 characters, must point only to public internet addresses |
 | `event_types` | optional, 1–20 strings, each an exact event type or `"*"`; default `["*"]` |
+
+Unknown fields → 422 `validation_failed`. Every refusal based on where the URL leads uses
+one message: "Endpoint URL must point only to public internet addresses".
+The operator allow-list (`SSRF_ALLOW_ORIGINS`) permits exact origins, is set only by us,
+and is empty by default.
 
 201 → `EndpointCreated` (with `signing_secret`, shown only here). An owner can have at most 20
 endpoints at a time; deleted ones don't count.

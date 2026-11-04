@@ -1,3 +1,4 @@
+// Checks configuration defaults and rejects unsafe operator settings.
 import { describe, expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 
@@ -7,6 +8,7 @@ const DB = { DATABASE_URL: "postgres://test@localhost/test" };
 describe("loadConfig", () => {
   test("uses safe defaults when nothing else is set", () => {
     expect(loadConfig(DB)).toEqual({
+      SSRF_ALLOW_ORIGINS: [],
       PORT: 8080,
       GIT_SHA: "dev",
       LOG_LEVEL: "info",
@@ -42,4 +44,16 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ ...DB, DB_POOL_MAX: bad })).toThrow(/DB_POOL_MAX/);
     }
   });
+});
+
+// Step 1: normalize safe origins and fail startup on anything more than an origin.
+test("SSRF_ALLOW_ORIGINS defaults to empty and normalizes a comma list", () => {
+  expect(loadConfig({ ...DB, SSRF_ALLOW_ORIGINS: "" }).SSRF_ALLOW_ORIGINS).toEqual([]);
+  expect(loadConfig({ ...DB, SSRF_ALLOW_ORIGINS: " http://Receiver.X:8080/, ,https://EXAMPLE.com:443 " })
+    .SSRF_ALLOW_ORIGINS).toEqual(["http://receiver.x:8080", "https://example.com"]);
+});
+test("SSRF_ALLOW_ORIGINS rejects paths, schemes, credentials, queries and fragments", () => {
+  for (const origin of ["https://x.test/path", "ftp://x.test", "https://user:pw@x.test", "https://x.test/?a=1", "https://x.test/#a", "https://x.test/?", "https://x.test/#", "not a url"]) {
+    expect(() => loadConfig({ ...DB, SSRF_ALLOW_ORIGINS: origin })).toThrow(/SSRF_ALLOW_ORIGINS/);
+  }
 });

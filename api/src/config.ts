@@ -5,8 +5,27 @@ import { z } from "zod";
 
 
 
+// Step 1: only operators set these exact origins; Phase 4 adds the demo receiver.
+// Empty in production until then. Customers never control this exception list.
+const AllowOrigins = z.string().default("").transform((raw, ctx) => {
+  const origins: string[] = [];
+  for (const item of raw.split(",").map((value) => value.trim()).filter(Boolean)) {
+    try {
+      const url = new URL(item);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password ||
+        url.pathname !== "/" || url.href.includes("?") || url.href.includes("#")) throw new Error("Invalid origin");
+      origins.push(url.origin);
+    } catch {
+      ctx.addIssue({ code: "custom", message: "must contain only http or https origins without credentials, paths, query or hash" });
+      return z.NEVER;
+    }
+  }
+  return origins;
+});
+
 // The settings the API needs. Env vars are text, so PORT is converted and checked.
 const Env = z.object({
+  SSRF_ALLOW_ORIGINS: AllowOrigins,
 
   PORT: z
     .string()
