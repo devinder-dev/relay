@@ -9,6 +9,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: relay-dashboard
+  namespace: relay
   labels:
     app.kubernetes.io/name: relay-dashboard
 spec:
@@ -26,6 +27,14 @@ spec:
       labels:
         app.kubernetes.io/name: relay-dashboard # ...and give every new pod this label
     spec:
+      # nginx never talks to the Kubernetes API, so the pod carries no service-account token.
+      automountServiceAccountToken: false
+      # The only place nginx writes: its pid file and temp folders are all under /tmp in
+      # nginx-unprivileged (pid /tmp/nginx.pid, client_body_temp_path /tmp/client_temp, …).
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
       containers:
         - name: nginx
           # Tag is the git SHA, set by the pipeline. Never "latest": a rollback has
@@ -33,6 +42,9 @@ spec:
           image: ghcr.io/devinder-dev/relay-dashboard:__GIT_SHA__
           ports:
             - containerPort: 8080
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             # Kubernetes sends no traffic here until this answers. Without it, a new
             # pod receives requests while nginx is still starting.
@@ -73,12 +85,16 @@ spec:
             # though the image already runs as uid 101. Kubernetes does not look inside the
             # image to check, so being non-root has to be declared.
             runAsNonRoot: true
+            # Written out, like the API's 1000, so it doesn't depend on the image's USER line.
+            runAsUser: 101
             seccompProfile:
               type: RuntimeDefault
             allowPrivilegeEscalation: false
-            # Not required by "restricted". Left false because nginx writes its cache and
-            # pid file under /var; making it read-only would mean emptyDir mounts for both.
-            readOnlyRootFilesystem: false
+            # Not required by "restricted", but nothing in the image may change at runtime, as
+            # for the API. nginx only writes under /tmp, which is the emptyDir above. Checked
+            # with the real image: read-only, only /tmp writable, uid 101, no capabilities →
+            # /index.html, the hashed bundle and page routes all answer 200.
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
 ---
@@ -86,6 +102,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: relay-dashboard
+  namespace: relay
 spec:
   selector:
     app.kubernetes.io/name: relay-dashboard   # the label the Deployment gives its pods
@@ -97,6 +114,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: relay-dashboard
+  namespace: relay
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
