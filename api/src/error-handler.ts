@@ -25,6 +25,20 @@ function send(
   return reply.code(status).send({ error });
 }
 
+// Step 1: allow only safe database metadata into logs. On Postgres 18.6 a CHECK
+// failure's detail holds the whole row, including signing secrets; JSON errors can
+// put the payload in where. Never log detail, where, hint or internal_query.
+function logSafe(error: FastifyError) {
+  if (error.name !== "PostgresError") return error;
+  const dbError = error as FastifyError & Record<string, unknown>;
+  return {
+    type: "PostgresError", code: dbError.code, message: dbError.message,
+    severity: dbError.severity, table: dbError.table_name,
+    constraint: dbError.constraint_name, routine: dbError.routine,
+  };
+}
+
+// Step 2: translate errors once, without exposing internal database details.
 export function errorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply) {
 
   if (error instanceof ZodError) {
@@ -33,13 +47,13 @@ export function errorHandler(error: FastifyError, request: FastifyRequest, reply
   }
 
   if (error instanceof AppError) {
-    return send(reply, request, error.status, error.code, error.message);
+    return send(reply, request, error.status, error.code, error.message, error.details);
   }
 
   // The database can't be reached right now (a restart, a short blip). The pod stays up and
   // ready; only this request fails, with a clear "try again in 5 s" instead of a vague 500.
   if (isDatabaseUnavailable(error)) {
-    request.log.warn({ err: error }, "⚠️ database unavailable, answered 503");
+    request.log.warn({ err: logSafe(error) }, "⚠️ database unavailable, answered 503");
     reply.header("retry-after", "5");
     return send(reply, request, 503, "service_unavailable", "The service is briefly unavailable, try again shortly");
   }
@@ -49,7 +63,7 @@ export function errorHandler(error: FastifyError, request: FastifyRequest, reply
     return send(reply, request, error.statusCode, code, error.message);
   }
   
-  request.log.error(error);
+  request.log.error(logSafe(error), "❌ unexpected error, answered 500");
  
   return send(reply, request, 500, "internal_error", "Something went wrong on our side");
 }

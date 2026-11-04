@@ -1,11 +1,14 @@
+// Checks the app through HTTP injection without connecting to a database.
 import { afterAll, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
-import { conflict } from "./errors.ts";
+import { createDb } from "./db.ts";
+import { AppError, conflict } from "./errors.ts";
 
 // A harmless database URL: these tests never connect to it.
-const app = buildApp(loadConfig({ DATABASE_URL: "postgres://test@localhost/test" }), { logger: false });
+const sql = createDb(loadConfig({ DATABASE_URL: "postgres://relay:x@127.0.0.1:1/relay" }));
+const app = buildApp(loadConfig({ DATABASE_URL: "postgres://test@localhost/test" }), { sql }, { logger: false });
 
 // Test-only routes that fail on purpose, one for each kind of error.
 app.get("/test/zod", async () => z.object({ name: z.string() }).parse({}));
@@ -24,7 +27,15 @@ app.get("/test/db-bug", async () => {
   throw Object.assign(new Error('relation "nope" does not exist'), { code: "42P01" });
 });
 
-afterAll(() => app.close());
+// Step 1: details remain public only when deliberately supplied by application code.
+app.get("/test/details", async () => {
+  throw new AppError(422, "validation_failed", "Invalid input", [{ path: "name", message: "Required" }]);
+});
+
+afterAll(async () => {
+  await app.close();
+  await sql.end({ timeout: 5 });
+});
 
 describe("error handler", () => {
   test("unknown route → 404 not_found, in our error shape", async () => {
@@ -101,4 +112,50 @@ describe("error handler", () => {
     expect(res.statusCode).toBe(500);
     expect(res.json().error.code).toBe("internal_error");
   });
+});
+
+// Step 2: the default text parser must not bypass the JSON-only contract.
+for (const contentType of ["text/plain", undefined]) {
+  test(`echo rejects ${contentType ?? "missing content type"}`, async () => {
+    const res = await app.inject({
+      method: "POST", url: "/test/echo", payload: "hello",
+      headers: contentType ? { "content-type": contentType } : {},
+    });
+    expect(res.statusCode).toBe(415);
+    expect(res.json().error.code).toBe("unsupported_media_type");
+  });
+}
+test("JSON with a charset passes", async () => {
+  const res = await app.inject({ method: "POST", url: "/test/echo",
+    headers: { "content-type": "application/json; charset=utf-8" }, payload: '{"ok":true}' });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ ok: true });
+});
+test("AppError carries deliberately supplied details", async () => {
+  const res = await app.inject({ method: "GET", url: "/test/details" });
+  expect(res.statusCode).toBe(422);
+  expect(res.json().error.details).toEqual([{ path: "name", message: "Required" }]);
+});
+
+// Step 3: a database row or JSON payload must never reach the log stream.
+test("Postgres error logs contain the code without secret detail or where", async () => {
+  const lines: string[] = [];
+  const logged = buildApp(loadConfig({ DATABASE_URL: "postgres://relay:x@127.0.0.1:1/relay" }), { sql },
+    { logStream: { write: (line) => { lines.push(line); } } });
+  logged.get("/test/pg-secret", async () => {
+    throw Object.assign(new Error("CHECK failed"), {
+      name: "PostgresError", code: "23514", severity: "ERROR",
+      detail: "Failing row contains (MARKER_SECRET_123)", where: "payload MARKER_SECRET_123",
+      hint: "MARKER_SECRET_123", internal_query: "MARKER_SECRET_123",
+    });
+  });
+  try {
+    const res = await logged.inject({ method: "GET", url: "/test/pg-secret" });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error.code).toBe("internal_error");
+    expect(lines.join("")).toContain("23514");
+    expect(lines.join("")).not.toContain("MARKER_SECRET_123");
+  } finally {
+    await logged.close();
+  }
 });

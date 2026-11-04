@@ -9,7 +9,7 @@ that changes this file, approved by both of us, before or together with the code
 | Topic | Rule |
 |---|---|
 | Base URL | `https://api.myrelay.tech` |
-| Auth | Every `/v1` route needs `Authorization: Bearer relay_live_<key>`. `/health/*` and `/version` need none |
+| Auth | Every `/v1` route needs `Authorization: Bearer relay_live_<key>`. `/health/*` and `/version` need none. Two `Authorization` headers → 401. Unknown `/v1` paths → 404 without checking the key (nothing is behind them) |
 | Format | JSON only (`Content-Type: application/json`), request bodies up to 256 KiB |
 | Field names | `snake_case` |
 | IDs | UUIDv7 strings, e.g. `0199a3b2-7c41-7d2e-9f10-3b5c8e1a2d47` |
@@ -43,7 +43,7 @@ A 422 also has `details`, one entry per problem:
 | 409 | `endpoint_deleted` | Replay of a delivery whose endpoint was deleted |
 | 409 | `endpoint_limit_reached` | Creating an endpoint when the owner already has 20 |
 | 413 | `payload_too_large` | Body over 256 KiB |
-| 415 | `unsupported_media_type` | Body that isn't JSON |
+| 415 | `unsupported_media_type` | Body that isn't `application/json` (including `text/plain`) |
 | 422 | `validation_failed` | Body or query fails the rules below (`details` lists why) |
 | 422 | `invalid_endpoint_url` | Endpoint URL that isn't `https`, or points to a private or internal address |
 | 500 | `internal_error` | Our bug. The message never contains internal details |
