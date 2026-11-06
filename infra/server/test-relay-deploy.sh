@@ -26,10 +26,10 @@ exit 0
 EOF
   # kubectl: every call's first word goes to "calls", so tests can check the order.
   # apply notes that it ran, and for which commit (applied-commits), and prints the API's
-  # Deployment, plus the dashboard's when k8s/app/dashboard.yaml exists (or fails if
+  # Deployment, plus dashboard, worker and demo receiver when their manifest files exist (or fails if
   # apply-fails exists). rollout status notes which Deployment it waited for (rollouts) and
   # fails when the checked-out commit is listed in "broken" (every Deployment of that commit)
-  # or, for the dashboard only, in "broken-dashboard".
+  # or, for a single Deployment, in "broken-dashboard" or "broken-worker".
   # create (the migrate Job) reads the commit from the Job's label and answers
   # job.batch/migrate-<first 5 characters>, or is refused when create-fails exists.
   # get <that job> answers the Job's true conditions: "SuccessCriteriaMet Complete" unless
@@ -43,10 +43,13 @@ case "\$*" in
   apply*) cat > /dev/null; touch "$T/applied"; cat "$T/checked-out" >> "$T/applied-commits"
           [ -e "$T/apply-fails" ] && exit 1; echo deployment.apps/relay-api
           [ -e "$T/home/relay/k8s/app/dashboard.yaml" ] && echo deployment.apps/relay-dashboard
+          [ -e "$T/home/relay/k8s/app/worker.yaml" ] && echo deployment.apps/relay-worker
+          [ -e "$T/home/relay/k8s/app/demo-receiver.yaml" ] && echo deployment.apps/relay-demo-receiver
           exit 0 ;;
   "rollout status"*) echo "\$3" >> "$T/rollouts"
           grep -qx "\$(cat "$T/checked-out")" "$T/broken" && exit 1
           [ "\${3##*/}" = relay-dashboard ] && grep -qx "\$(cat "$T/checked-out")" "$T/broken-dashboard" 2>/dev/null && exit 1
+          [ "\${3##*/}" = relay-worker ] && grep -qx "\$(cat "$T/checked-out")" "$T/broken-worker" 2>/dev/null && exit 1
           exit 0 ;;
   create*) commit=\$(sed -n 's/.*relay.myrelay.tech\/commit: "\([0-9a-f]*\)".*/\1/p')
            [ -e "$T/create-fails" ] && { echo 'Error from server (Forbidden): jobs.batch is forbidden' >&2; exit 1; }
@@ -217,6 +220,32 @@ check "last good stays the same" "$(cat "$T/home/.relay-last-good")" $GOOD
 check "waits for both, then both again for the rollback" "$(rollouts)" \
   "deployment.apps/relay-api deployment.apps/relay-dashboard deployment.apps/relay-api deployment.apps/relay-dashboard "
 check "prints the pods" "$(grep -q -- '--- pods' "$T/out" && echo yes || echo no)" yes
+
+# The worker is staged at zero before activation. The receiver adds a fourth Deployment.
+with_worker_and_receiver() {
+  echo "kind: Deployment" > "$T/home/relay/k8s/app/worker.yaml"
+  echo "kind: Deployment" > "$T/home/relay/k8s/app/demo-receiver.yaml"
+}
+
+echo "20. Four Deployments, all fine"
+setup; with_dashboard; with_worker_and_receiver; code=$(run $GOOD)
+check "exits 0" "$code" 0
+check "waits for all four in apply order" "$(rollouts)" \
+  "deployment.apps/relay-api deployment.apps/relay-dashboard deployment.apps/relay-worker deployment.apps/relay-demo-receiver "
+
+echo "21. A rollback never deletes anything"
+# The script can't delete, so a Deployment added only by the failed commit stays; that's why
+# the worker is added at 0 replicas first (k8s/README.md).
+setup; with_dashboard; with_worker_and_receiver
+echo $GOOD > "$T/home/.relay-last-good"; echo $BAD > "$T/broken-worker"
+code=$(run $BAD)
+check "exits 1 (CI turns red)" "$code" 1
+check "puts the last good commit back" "$(cat "$T/checked-out")" $GOOD
+check "applies the failed commit, then the last good commit" "$(cat "$T/applied-commits")" "$(printf '%s\n%s' $BAD $GOOD)"
+check "last good stays the same" "$(cat "$T/home/.relay-last-good")" $GOOD
+check "waits through the broken worker, then all four on rollback" "$(rollouts)" \
+  "deployment.apps/relay-api deployment.apps/relay-dashboard deployment.apps/relay-worker deployment.apps/relay-api deployment.apps/relay-dashboard deployment.apps/relay-worker deployment.apps/relay-demo-receiver "
+check "never calls kubectl delete" "$(grep -cx delete "$T/calls")" 0
 
 echo; echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

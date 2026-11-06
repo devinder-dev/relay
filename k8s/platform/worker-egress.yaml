@@ -1,0 +1,70 @@
+# Worker egress: DNS, Postgres, the demo receiver, and internet TCP 443 except private,
+# special and our own addresses. The rules were proven on our cluster with a probe pod
+# on 6 November 2026; the worker's pinned address (ADR 0008) is the first rebinding defense.
+# This policy is the second layer. An administrator applies this platform file BEFORE the
+# worker runs. The pipeline can't create or change NetworkPolicies, so a merged PR can't
+# loosen these rules. Limit: selection is by label; a relabeled pod would escape this policy.
+# A namespace-wide default egress policy is later hardening.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-worker-egress
+  namespace: relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: relay-worker
+  policyTypes: ["Egress"]
+  egress:
+    # DNS: CoreDNS in kube-system (k3s labels it k8s-app: kube-dns).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Postgres, by pod label (rules are OR-ed, so this works even though 10/8 is blocked below).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # The demo receiver (it doesn't exist yet; the rule is here so the probe tests the real file).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: relay-demo-receiver
+      ports:
+        - protocol: TCP
+          port: 8080
+    # The internet on HTTPS only, minus private, special and our own addresses.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+              - 81.88.23.71/32
+      ports:
+        - protocol: TCP
+          port: 443

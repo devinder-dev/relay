@@ -1,0 +1,85 @@
+# The internal demo receiver verifies signatures and demonstrates failures and retries.
+# The pipeline deploys the API image with a different entry point. Its signing Secret must
+# already exist, created by an administrator from the demo endpoint's one-time response.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-demo-receiver
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-demo-receiver
+spec:
+  replicas: 1              # demo retry counters live in memory, so use one pod
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: relay-demo-receiver
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1           # counters reset on restart and are separate in overlapping pods
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: relay-demo-receiver
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000     # the API image's bun user
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: receiver
+          image: ghcr.io/devinder-dev/relay-api:__GIT_SHA__
+          command: ["bun", "src/demo/receiver.ts"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Made by hand from the demo endpoint's signing secret, shown once by the API.
+            # Never in git; the pod cannot start until this Secret and key exist.
+            - name: DEMO_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: relay-demo-receiver
+                  key: signing_secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-demo-receiver
+  namespace: relay
+spec:
+  type: ClusterIP          # namespace relay's Service policy refuses external exposure
+  selector:
+    app.kubernetes.io/name: relay-demo-receiver
+  ports:
+    - name: http
+      port: 80
+      targetPort: http     # forwards to the container's named port 8080
+# No Ingress: only the worker, inside the cluster, sends to this receiver.

@@ -4,10 +4,10 @@ How each folder gets onto the cluster, and who may apply it.
 
 | Folder | What's in it | Applied by |
 |---|---|---|
-| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay` and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
+| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay`, the worker's NetworkPolicy and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
 | `k8s/data/` (from step 2.3) | Postgres: its Service and StatefulSet (`postgres.yaml`) and its first-start script (`initdb/`). Later also the backup CronJob (Phase 6) | One of us, by hand, after the PR is reviewed. **Never the pipeline**: the `deployer` account can't create StatefulSets or Secrets, so a merged PR can't change the database's version or its disk. Order and recovery: [`infra/server/README.md`](../infra/server/README.md), section 6 |
 | `k8s/migrate/` (from step 2.4) | The migrate Job: runs the commit's database migrations (dbmate) once per deploy | Only `relay-deploy`, with `kubectl create` (never `apply`: every deploy gets a fresh Job name), **before** `k8s/app/`. Kubernetes deletes finished Jobs after 1 hour, because the `deployer` account can't delete |
-| `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API and the dashboard: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
+| `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API, dashboard, worker and demo receiver: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
 
 ## Rules
 
@@ -52,6 +52,24 @@ How each folder gets onto the cluster, and who may apply it.
   before the policy.
 - **No Secrets in git.** They are created on the server with `kubectl create secret`.
 - **Git and the cluster must match.** Everything applied by hand is committed in the same PR.
+
+## Worker
+
+The worker starts at **0 replicas**. Before it runs, an administrator applies
+`k8s/platform/worker-egress.yaml` and checks the worker's allowed and blocked connections.
+A separate one-line PR then changes the worker to 2 replicas. Rolling that activation back
+restores 0: the deployer can update a Deployment but cannot delete a newly added one.
+
+Before the receiver is deployed, an administrator creates the demo endpoint and makes Secret
+`relay-demo-receiver`, key `signing_secret`, from the signing secret the API shows once.
+The Secret is never in git; the receiver cannot start without it.
+
+The worker's production manifest temporarily uses the short exam demo retry schedule
+`5s,30s,2m,10m`: 5 tries, about 13 minutes of waits. The code default stays 8 tries over about
+21 hours. Change the demo setting deliberately after grading.
+
+**Stop switch (admin only):** `kubectl -n relay scale deployment/relay-worker --replicas=0`.
+The next deploy restores what git says, so follow a lasting manual stop with a PR.
 
 ## Applying a platform file
 

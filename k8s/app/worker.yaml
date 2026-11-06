@@ -1,0 +1,84 @@
+# The delivery worker, staged without running pods until its egress policy is checked.
+# Applied by the pipeline; it shares the API image but starts the worker entry point.
+# No Service or Ingress: the worker claims database rows and sends outbound requests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay-worker
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-worker
+spec:
+  # 0 until the worker's NetworkPolicy is applied and checked.
+  # A one-line PR then turns it on (2). Rolling that PR back sets it to 0 again, because this
+  # release is the last good one: the pipeline can't delete a Deployment, only change it.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: relay-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # old and new workers can overlap; SKIP LOCKED separates their claims
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: relay-worker # the NetworkPolicy selects this exact label
+    spec:
+      automountServiceAccountToken: false    # the worker never calls the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000                     # the API image's bun user
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # The worker drains for at most 20 s, then closes the pool within 5 s.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          image: ghcr.io/devinder-dev/relay-api:__GIT_SHA__
+          command: ["bun", "src/worker/main.ts"]
+          ports:
+            - name: health
+              containerPort: 9090
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: relay-db
+                  key: url
+            - name: DB_POOL_MAX
+              value: "3"                   # two workers plus a surge pod fit the connection budget
+            - name: SSRF_ALLOW_ORIGINS
+              value: "http://relay-demo-receiver.relay.svc.cluster.local"
+            # A short demo schedule while the exam is graded (5 tries, dead after about 13 minutes).
+            # The code's default is the real one, 8 tries over about 21 hours; README says so.
+            - name: RETRY_SCHEDULE
+              value: "5s,30s,2m,10m"
+          # Startup allows 90 s: the worker waits up to 60 s for the database before health starts.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 2
+            failureThreshold: 45
+          # 503 if the loop heartbeat is older than 30 s; a database outage doesn't fail it.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            periodSeconds: 20
+            failureThreshold: 3
+          # No readinessProbe: the worker gets no inbound workload traffic.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi                # check with kubectl top once the worker runs
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
