@@ -37,3 +37,4 @@ individually, so the code must be easy for both of us to read and explain.
 - The API must allow CORS from `https://cdn.myrelay.tech` (and localhost in CI).
 - The backend keeps using `fetch` in the worker to deliver webhooks: it needs
   `redirect: "manual"` and `AbortSignal.timeout()`, and runs on the server, not in the browser.
+  Changed for the worker by ADR 0008 (`node:https` with a pinned lookup).

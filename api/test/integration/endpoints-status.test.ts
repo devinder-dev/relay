@@ -11,7 +11,7 @@ test("newest dead, delivered and pending deliveries determine endpoint status", 
   const endpointId = created.json().id;
   for (const [status, attempts, code, expected] of [
     ["dead", 8, 500, "failing"], ["delivered", 1, 200, "active"],
-    ["pending", 1, 500, "failing"], ["pending", 0, null, "active"],
+    ["pending", 1, 500, "failing"], ["pending", 1, null, "active"], ["pending", 2, 500, "failing"],
   ] as const) {
     const [event] = await f.sql`INSERT INTO events (owner_id, type, payload)
       VALUES (${a.owner.id}, 'test.status', '{}'::jsonb) RETURNING id`;

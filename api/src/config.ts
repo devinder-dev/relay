@@ -7,7 +7,7 @@ import { z } from "zod";
 
 // Step 1: only operators set these exact origins; Phase 4 adds the demo receiver.
 // Empty in production until then. Customers never control this exception list.
-const AllowOrigins = z.string().default("").transform((raw, ctx) => {
+export const AllowOrigins = z.string().default("").transform((raw, ctx) => {
   const origins: string[] = [];
   for (const item of raw.split(",").map((value) => value.trim()).filter(Boolean)) {
     try {

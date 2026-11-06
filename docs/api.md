@@ -94,7 +94,7 @@ export interface Delivery {
   attempts: number;                     // tries in the current cycle (the retry budget); replay resets it to 0
   next_attempt_at: string | null;       // when the next try is due; null unless status is "pending"
   last_status_code: number | null;      // HTTP status of the last try; null if the receiver never answered
-  last_error: DeliveryError | null;     // why the last try failed without a status code; null otherwise
+  last_error: DeliveryError | null;     // why the last try failed without a status code, or "redirect" for a 3xx (never followed; the code is kept); null otherwise
   delivered_at: string | null;          // set only when status is "delivered"
   created_at: string;
   event: { id: string; type: string };
@@ -108,7 +108,7 @@ export interface Attempt {
   started_at: string;
   duration_ms: number;
   status_code: number | null;           // null = no HTTP answer (see error)
-  error: AttemptError | null;           // null when the receiver answered (even with 500)
+  error: AttemptError | null;           // null when the receiver answered (even with 500), except a 3xx: "redirect" (never followed)
   response_excerpt: string | null;      // first 1 KB of the receiver's answer
 }
 
@@ -140,13 +140,43 @@ export interface ApiError {
 ```
 
 **`attempts` vs `attempt_log`:** `attempts` is a **number**, the retry budget for the current cycle.
-It drives the backoff schedule and goes back to 0 on replay. `attempt_log` is the **history**: every try
-ever made, numbered, never deleted. After a replay of a dead delivery, `attempts` is 0 and
+It drives the backoff schedule and goes back to 0 on replay. Tries count when a worker starts one,
+so `attempts` can be higher than the entries in `attempt_log` for this cycle if a worker was lost
+during a try. A delivery that runs out of tries this way becomes `dead` and keeps the error of
+the last **finished** try. `attempt_log` is the **history** of finished tries, numbered, never deleted.
+After a replay of a dead delivery with eight finished tries, `attempts` is 0 and
 `attempt_log` still has its 8 old rows; the next try becomes number 9.
 
 **Endpoint `status`** is worked out when the list is read, from the endpoint's latest delivery:
 `failing` if its latest delivery is `dead`, or is `pending` after a failed try; otherwise `active`.
 Deleted endpoints aren't listed at all.
+
+## What Relay sends to your endpoint
+
+Relay sends a `POST` to the endpoint URL. It never follows redirects. DNS resolution and the
+HTTP request share a 10 s deadline.
+
+| Header | Value |
+|---|---|
+| `content-type` | `application/json` |
+| `user-agent` | `Relay/1 (+https://api.myrelay.tech)` |
+| `webhook-id` | The event id, the same on every try and replay |
+| `webhook-timestamp` | Unix seconds when this try is sent |
+| `webhook-signature` | `v1,` followed by the base64 HMAC-SHA256 signature of `id.timestamp.body`, using the key decoded from the base64 part after `whsec_` |
+
+The body has exactly this shape:
+
+```json
+{ "type": "invoice.paid", "timestamp": "2026-10-25T14:03:21.512Z", "data": {} }
+```
+
+`type` is the event type, `timestamp` is the event's `created_at` in ISO 8601, and `data` is its
+payload. The body's timestamp is when the event was created; the header's timestamp is when
+this try was sent. Each try gets a fresh signature over the exact body bytes.
+
+A 2xx response means delivered. Anything else is retried until the retry budget runs out.
+Verify with a Standard Webhooks library, which refuses timestamps older than five minutes.
+Deduplicate on `webhook-id`: the same event can arrive more than once.
 
 ## Routes
 

@@ -32,15 +32,16 @@ export async function insertEndpoint(tx: Tx, ownerId: string, input: EndpointInp
 // Step 2: the newest delivery determines status. Ids are UUIDv7 (ordered by time), so id DESC
 // is newest first and reads one row from deliveries_endpoint_id; sorting by created_at would
 // read every delivery the endpoint ever had.
-// This relies on Phase 4 raising attempts when a try has finished, not when claimed.
+// Attempts count at claim; only a recorded failure makes a pending delivery failing.
 export async function listLiveEndpoints(db: Sql, ownerId: string): Promise<ListedEndpoint[]> {
   return db<ListedEndpoint[]>`
     SELECT e.id, e.name, e.url, e.event_types, e.created_at,
-      CASE WHEN latest.status = 'dead' OR (latest.status = 'pending' AND latest.attempts > 0)
+      CASE WHEN latest.status = 'dead' OR (latest.status = 'pending' AND (latest.last_error IS NOT NULL OR
+        (latest.last_status_code IS NOT NULL AND latest.last_status_code NOT BETWEEN 200 AND 299)))
         THEN 'failing' ELSE 'active' END AS status
     FROM endpoints e
     LEFT JOIN LATERAL (
-      SELECT d.status, d.attempts FROM deliveries d
+      SELECT d.status, d.last_error, d.last_status_code FROM deliveries d
       WHERE d.endpoint_id = e.id AND d.owner_id = e.owner_id
       ORDER BY d.id DESC LIMIT 1
     ) latest ON true
