@@ -115,6 +115,21 @@ jobs:
           fi
           docker exec smoke-pg psql -X -U postgres -d relay -Atc \
             "select version from schema_migrations order by version" | sed 's/^/applied: /'
+      - name: Smoke-test the signed demo receiver inside the image
+        shell: bash
+        run: |
+          TEST_SIGNING_SECRET="whsec_$(openssl rand -base64 32)"
+          docker run -d --name smoke-receiver --network smoke-net --read-only --user 1000:1000 --cap-drop ALL \
+            -e DEMO_SIGNING_SECRET="$TEST_SIGNING_SECRET" relay-api:smoke bun src/demo/receiver.ts
+          trap 'docker logs smoke-receiver; docker rm -f smoke-receiver >/dev/null' EXIT
+          for _ in $(seq 1 30); do
+            docker exec smoke-receiver bun -e 'process.exit((await fetch("http://127.0.0.1:8080/health")).ok ? 0 : 1)' && break
+            sleep 1
+          done
+          docker exec smoke-receiver bun -e 'process.exit((await fetch("http://127.0.0.1:8080/health")).ok ? 0 : 1)'
+          docker run --rm --network smoke-net --read-only --user 1000:1000 --cap-drop ALL \
+            -v "$PWD/api/scripts/receiver-smoke.ts:/tmp/receiver-smoke.ts:ro" \
+            relay-api:smoke bun /tmp/receiver-smoke.ts http://smoke-receiver:8080/hooks "$TEST_SIGNING_SECRET"
       # Only after a merge to main: push the same image. Its layers come from the build above
       # (the builder's cache), so this takes seconds and pushes what was just tested.
       - name: Push the image (main only)

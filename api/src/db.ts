@@ -15,7 +15,7 @@ export type Log = {
 };
 
 // Step 1: the pool. Every number here is a limit, so nothing can hang forever.
-export function createDb(config: Config): Sql {
+export function createDb(config: Pick<Config, "DATABASE_URL" | "DB_POOL_MAX">): Sql {
   return postgres(config.DATABASE_URL, {
     max: config.DB_POOL_MAX, // at most this many open connections (5 by default)
     idle_timeout: 30, // close a connection nobody used for 30 s

@@ -94,7 +94,7 @@ export interface Delivery {
   attempts: number;                     // tries in the current cycle (the retry budget); replay resets it to 0
   next_attempt_at: string | null;       // when the next try is due; null unless status is "pending"
   last_status_code: number | null;      // HTTP status of the last try; null if the receiver never answered
-  last_error: DeliveryError | null;     // why the last try failed without a status code; null otherwise
+  last_error: DeliveryError | null;     // why the last try failed without a status code, or "redirect" for a 3xx (never followed; the code is kept); null otherwise
   delivered_at: string | null;          // set only when status is "delivered"
   created_at: string;
   event: { id: string; type: string };
@@ -108,7 +108,7 @@ export interface Attempt {
   started_at: string;
   duration_ms: number;
   status_code: number | null;           // null = no HTTP answer (see error)
-  error: AttemptError | null;           // null when the receiver answered (even with 500)
+  error: AttemptError | null;           // null when the receiver answered (even with 500), except a 3xx: "redirect" (never followed)
   response_excerpt: string | null;      // first 1 KB of the receiver's answer
 }
 
