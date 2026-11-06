@@ -6,10 +6,10 @@ import { buildBody, signatureHeaders } from "../../src/worker/sign.ts";
 const secret = "whsec_" + Buffer.alloc(32, 4).toString("base64");
 const receiver = createReceiver({ secret, port: 0 });
 afterAll(() => receiver.stop(true));
-function request(payload = {}, id = crypto.randomUUID(), tamper = false) {
+function request(payload = {}, id = crypto.randomUUID(), tamper = false, target = receiver) {
   const body = buildBody({ type: "demo.ping", createdAt: new Date(), payload });
   const headers = signatureHeaders({ secret, eventId: id, body, nowSeconds: Date.now() / 1000 });
-  return fetch(`http://127.0.0.1:${receiver.port}/hooks`, { method: "POST", headers,
+  return fetch(`http://127.0.0.1:${target.port}/hooks`, { method: "POST", headers,
     body: tamper ? Buffer.concat([body, Buffer.from(" ")]) : body });
 }
 // Step 1: only the verified payload controls behavior; URL parameters have no role.
@@ -34,4 +34,17 @@ test("slow_ms is capped at fifteen seconds", async () => {
   const sleep = spyOn(Bun, "sleep").mockImplementation(() => Promise.resolve());
   try { expect((await request({ demo: { slow_ms: 999999 } })).status).toBe(200); expect(sleep).toHaveBeenCalledWith(15_000); }
   finally { sleep.mockRestore(); }
+});
+test("a new event past the counter cap clears demo state and still answers", async () => {
+  const capped = createReceiver({ secret, port: 0, maxTracked: 2 });
+  const first = crypto.randomUUID(), second = crypto.randomUUID();
+  const payload = { demo: { fail: 1 } };
+  try {
+    expect((await request(payload, first, false, capped)).status).toBe(500);
+    expect((await request(payload, second, false, capped)).status).toBe(500);
+    expect((await request(payload, first, false, capped)).status).toBe(200);
+    expect((await request({}, crypto.randomUUID(), false, capped)).status).toBe(200);
+    expect((await request(payload, first, false, capped)).status).toBe(500);
+    expect((await request(payload, second, false, capped)).status).toBe(500);
+  } finally { capped.stop(true); }
 });

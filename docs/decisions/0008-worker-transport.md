@@ -29,3 +29,10 @@ Node's request API adds explicit lifecycle and response-stream handling, which m
 The worker's administrator-managed NetworkPolicy is a second layer; this code-only release
 does not install or claim to verify that policy. Endpoint creation retains DNS-free exact-origin
 exceptions so an internal Service can be registered before it exists; sending always resolves.
+
+The operator allow-list (`SSRF_ALLOW_ORIGINS`) is global: any owner can register an endpoint
+at exactly the demo receiver's origin, and Relay will POST there over plain HTTP inside the
+cluster. We accept this deliberately. Customers cannot change the list; its only target is our
+own demo receiver, which accepts only signatures made with the demo endpoint's key (others get
+401). Scoping the list per owner would bring an owner concept into the SSRF layer that nothing
+else needs. After grading, we empty the list and remove the receiver.

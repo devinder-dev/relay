@@ -1,8 +1,10 @@
 // Verifies signed demo requests and chooses failure/slow behavior from their trusted payload.
 import { Webhook } from "standardwebhooks";
 
+const MAX_TRACKED = 5_000; // Bound demo memory; clearing temporary counters is acceptable.
+
 // Step 1: counters are demo state, reset on restart, never durable retry accounting.
-export function createReceiver({ secret, port }: { secret: string; port: number }) {
+export function createReceiver({ secret, port, maxTracked = MAX_TRACKED }: { secret: string; port: number; maxTracked?: number }) {
   const verifier = new Webhook(secret);
   const counts = new Map<string, number>();
   return Bun.serve({ port, hostname: "0.0.0.0", maxRequestBodySize: 64 * 1024,
@@ -32,6 +34,7 @@ export function createReceiver({ secret, port }: { secret: string; port: number 
         };
         valid = true;
         const demo = verified?.data?.demo;
+        if (!counts.has(id) && counts.size >= maxTracked) counts.clear();
         const tries = (counts.get(id) ?? 0) + 1; counts.set(id, tries);
         const fail = typeof demo?.fail === "number" && Number.isFinite(demo.fail) ? Math.max(0, Math.floor(demo.fail)) : 0;
         const slow = typeof demo?.slow_ms === "number" && Number.isFinite(demo.slow_ms)
