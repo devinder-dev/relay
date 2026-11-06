@@ -3,7 +3,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { Sql } from "../db.ts";
 import { notFound, unauthorized } from "../errors.ts";
 import { DeliveryId, DeliveryListQuery } from "../schemas/deliveries.ts";
-import { getDelivery, listDeliveries } from "../services/deliveries.ts";
+import { getDelivery, listDeliveries, replayDelivery } from "../services/deliveries.ts";
 
 export const deliveryRoutes: FastifyPluginAsync<{ sql: Sql }> = async (app, { sql }) => {
   // Step 1: query input uses public names; repository filters use local camelCase.
@@ -20,5 +20,12 @@ export const deliveryRoutes: FastifyPluginAsync<{ sql: Sql }> = async (app, { sq
     const id = DeliveryId.safeParse(request.params.id);
     if (!id.success) throw notFound("Delivery");
     return getDelivery(sql, request.owner.id, id.data);
+  });
+  // Step 3: replay takes no body; malformed, missing and foreign ids share the same 404.
+  app.post<{ Params: { id: string } }>("/deliveries/:id/replay", async (request, reply) => {
+    if (!request.owner) throw unauthorized();
+    const id = DeliveryId.safeParse(request.params.id);
+    if (!id.success) throw notFound("Delivery");
+    return reply.code(202).send(await replayDelivery(sql, request.owner.id, id.data));
   });
 };
