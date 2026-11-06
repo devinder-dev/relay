@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import StatusPill from '../components/StatusPill'
-import { addEndpoint, listEndpoints } from '../mockStore'
+import { createEndpoint, listEndpoints, type ApiFailure } from '../api'
 import type { Endpoint, EndpointCreated } from '../types'
 
 const field =
@@ -72,22 +72,49 @@ function checkUrl(raw: string): string | null {
   return null
 }
 
+// A 422 names the fields that failed (docs/api.md). Join them into the form's one message
+// line rather than adding paragraphs, so there is a single place a reader looks for why.
+function describe(failure: ApiFailure): string {
+  if (!failure.details.length) return failure.message
+  return failure.details.map((d) => `${d.path}: ${d.message}`).join('; ')
+}
+
 export default function Endpoints() {
-  // From the store, not the fixture, so an endpoint added earlier in the session is
-  // still listed after navigating away and coming back.
-  const [rows, setRows] = useState<Endpoint[]>(listEndpoints)
+  // null means "still asking"; an empty array means this owner has no endpoints.
+  const [rows, setRows] = useState<Endpoint[] | null>(null)
+  const [loadFailure, setLoadFailure] = useState<ApiFailure | null>(null)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   // The signing secret comes back once, in the answer to POST /v1/endpoints, and
   // is never returned again. Holding it here is what lets the screen show it; it
   // disappears for good as soon as this state is cleared.
   const [secret, setSecret] = useState<EndpointCreated | null>(null)
 
-  function add(e: FormEvent) {
+  useEffect(() => {
+    let ignore = false
+
+    listEndpoints()
+      .then((found) => {
+        if (!ignore) setRows(found)
+      })
+      .catch((failure: unknown) => {
+        if (!ignore) setLoadFailure(failure as ApiFailure)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [])
+
+  async function add(e: FormEvent) {
     e.preventDefault()
 
+    // These two checks are the form being helpful, not the rules being enforced: the API
+    // checks the same things and is the authority. They buy a message on the right field
+    // instead of a bare 422, and one less round trip.
     const trimmedName = name.trim()
     if (!trimmedName) return setError('Give the endpoint a name.')
     if (trimmedName.length > NAME_MAX) {
@@ -97,17 +124,24 @@ export default function Endpoints() {
     const urlError = checkUrl(url)
     if (urlError) return setError(urlError)
 
-    // The store keeps the row without the secret, the way the API's list does, and
-    // hands the secret back here to be shown once. Reading the list back from the
-    // store rather than appending to local state is what makes the new endpoint
-    // still be here after navigating away and returning.
-    const created = addEndpoint(trimmedName, url.trim())
-
-    setRows(listEndpoints())
-    setSecret(created)
-    setName('')
-    setUrl('')
     setError(null)
+    setSaving(true)
+
+    try {
+      // The answer carries the signing secret, and nothing else ever will. The list is read
+      // back from the API rather than appended to here, so what is on screen is what the
+      // API would send on the next visit - including the status it worked out.
+      const created = await createEndpoint({ name: trimmedName, url: url.trim() })
+
+      setSecret(created)
+      setName('')
+      setUrl('')
+      setRows(await listEndpoints())
+    } catch (failure: unknown) {
+      setError(describe(failure as ApiFailure))
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -125,7 +159,7 @@ export default function Endpoints() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((e) => (
+            {(rows ?? []).map((e) => (
               <tr
                 key={e.id}
                 className="border-b border-[var(--line-soft)] last:border-0 hover:bg-[var(--paper)]"
@@ -142,6 +176,21 @@ export default function Endpoints() {
             ))}
           </tbody>
         </table>
+
+        {/* Outside the table: a "loading" row inside tbody would be counted as an endpoint. */}
+        {rows === null && !loadFailure && (
+          <p className="px-4 py-8 text-center text-sm text-[var(--ink-dim)]">Loading…</p>
+        )}
+
+        {loadFailure && (
+          <p className="px-4 py-8 text-center text-sm text-[var(--bad)]">{loadFailure.message}</p>
+        )}
+
+        {rows?.length === 0 && (
+          <p className="px-4 py-8 text-center text-sm text-[var(--ink-dim)]">
+            No endpoints yet. Add one below.
+          </p>
+        )}
       </div>
 
       {secret && (
@@ -175,6 +224,7 @@ export default function Endpoints() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Slack alerts"
+            disabled={saving}
             className={field}
           />
         </label>
@@ -186,6 +236,7 @@ export default function Endpoints() {
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://example.com/hooks/relay"
+            disabled={saving}
             className={field}
           />
         </label>
@@ -194,7 +245,8 @@ export default function Endpoints() {
 
         <button
           type="submit"
-          className="self-start rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+          disabled={saving}
+          className="self-start rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           Add endpoint
         </button>
