@@ -1,5 +1,4 @@
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
-import { me } from './mocks'
 import Connect from './pages/Connect'
 import DeliveryDetail from './pages/DeliveryDetail'
 import DeliveryLog from './pages/DeliveryLog'
@@ -28,9 +27,11 @@ export default function App() {
   // depending on that is why this is written as a read rather than a useState.
   useLocation()
   const connected = Boolean(sessionStorage.getItem('relay_key'))
+  const keyPrefix = sessionStorage.getItem('relay_key_prefix')
 
   function disconnect() {
     sessionStorage.removeItem('relay_key')
+    sessionStorage.removeItem('relay_key_prefix')
     navigate('/')
   }
 
@@ -57,7 +58,7 @@ export default function App() {
                 {/* The prefix comes from GET /v1/me, not from what was typed: the API
                     is what knows which key this is. Only the prefix is ever shown. */}
                 <span className="mono text-xs text-[var(--ink-faint)]">
-                  {me.key.prefix}
+                  {keyPrefix}
                 </span>
                 <button
                   onClick={disconnect}

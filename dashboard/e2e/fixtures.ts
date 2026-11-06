@@ -1,4 +1,5 @@
 import { test as base, expect } from '@playwright/test'
+import { installApiMock } from './api-mock'
 
 // A test that also fails when the browser console logs an error.
 //
@@ -9,11 +10,38 @@ import { test as base, expect } from '@playwright/test'
 //
 // This runs against the dev server, where React still emits these warnings; a
 // production build strips them.
-export const test = base.extend<{ noConsoleErrors: void }>({
-  noConsoleErrors: [
+export const test = base.extend<{
+  apiMock: void
+  /**
+   * Console errors a test means to cause, as patterns.
+   *
+   * Chrome logs "Failed to load resource" for every refused request, so a test that checks
+   * what a rejected key looks like would otherwise fail on its own 401. Declaring it per test
+   * keeps the guard strict everywhere else: a request we did not mean to make still fails.
+   */
+  expectedConsoleErrors: RegExp[]
+  noConsoleErrors: void
+}>({
+  expectedConsoleErrors: [[], { option: true }],
+  // The screens call the real API client; this answers it from the fixtures. Registered
+  // before the test navigates, or the first request would escape to a server that is not there.
+  apiMock: [
     async ({ page }, use) => {
+      await installApiMock(page)
+      await use()
+    },
+    { auto: true },
+  ],
+
+  noConsoleErrors: [
+    async ({ page, expectedConsoleErrors }, use) => {
       const errors: string[] = []
-      page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
+      page.on('console', (m) => {
+        if (m.type() !== 'error') return
+        if (expectedConsoleErrors.some((pattern) => pattern.test(m.text()))) return
+        errors.push(m.text())
+      })
+      // An uncaught exception is never expected, whatever a test declares.
       page.on('pageerror', (e) => errors.push(String(e)))
 
       await use()
