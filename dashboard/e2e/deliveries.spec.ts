@@ -124,11 +124,17 @@ test('a replay is still there in the log and on the way back', async ({ page }) 
   await expect(page.getByTestId('status')).toHaveText('pending')
 })
 
-test('an id that does not exist says so', async ({ page }) => {
-  // The positive control for the test above: "Delivery not found" has to still
-  // appear for a real miss, or that assertion proves nothing.
-  await page.goto('/deliveries/0199ffff-ffff-7fff-bfff-ffffffffffff')
+// This one asks for an id the API refuses, so the browser's own note about the 404 is
+// expected. React's StrictMode runs the effect twice in development, so there are two.
+test.describe('a missing delivery', () => {
+  test.use({ expectedConsoleErrors: [/Failed to load resource.*404/] })
 
-  await expect(page.getByText('Delivery not found')).toBeVisible()
-  await expect(page.getByTestId('status')).toBeHidden()
+  test('an id that does not exist says so', async ({ page }) => {
+    // The positive control for the test above: "Delivery not found" has to still
+    // appear for a real miss, or that assertion proves nothing.
+    await page.goto('/deliveries/0199ffff-ffff-7fff-bfff-ffffffffffff')
+
+    await expect(page.getByText('Delivery not found')).toBeVisible()
+    await expect(page.getByTestId('status')).toBeHidden()
+  })
 })
