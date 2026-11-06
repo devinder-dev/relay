@@ -28,10 +28,10 @@ fi
 
 # 2. One deploy at a time: a second deploy waits here for up to 30 minutes. The worst case is
 #    a deploy and then its rollback, each one migrate Job (up to 180 s) plus up to 180 s per
-#    Deployment: with the API and the dashboard about 18 minutes, with the worker (Phase 4)
-#    about 24. In CI this rarely waits at all, because the pipeline already runs main's
-#    deploys one after the other; it protects against an admin deploying by hand at the same
-#    moment. The lock is released by itself when the script ends, even if it crashes.
+#    Deployment: four Deployments (API, dashboard, worker, demo receiver) take about 30 minutes,
+#    the same as the lock wait. A deploy that can't get the lock changes nothing and says to
+#    re-run. CI normally queues deploys; the lock also covers an admin deploying at the same
+#    moment. It is released by itself when the script ends, even if it crashes.
 exec 9>/home/deploy/.relay-deploy.lock
 flock --wait 1800 9 || fail "another deploy is still running after 30 minutes: nothing was changed, re-run this job"
 
