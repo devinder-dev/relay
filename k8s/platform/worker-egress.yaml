@@ -14,6 +14,8 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: relay-worker
+  # Egress only, on purpose: listing Ingress with no rules would block the kubelet's startup and
+  # liveness probes on port 9090, and the worker would restart forever.
   policyTypes: ["Egress"]
   egress:
     # DNS: CoreDNS in kube-system (k3s labels it k8s-app: kube-dns).
