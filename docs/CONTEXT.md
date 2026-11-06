@@ -197,10 +197,11 @@ Phase 3 (core API) is done and live (4 Nov): API-key auth, endpoints with the SS
 and a 20-endpoint limit, events with idempotency, delivery reads and CORS. The dashboard is
 live on https://cdn.myrelay.tech; its screens still use mock data, not the real API.
 
-Phase 4 (worker) is built and tested in #36; replay is built and tested in #37. Both PRs are
-still open. Activation follows the plan in stages: replay and the demo Secret first, then the
-receiver and worker at 0 replicas, the checked NetworkPolicy, and a separate activation release.
-TODO(Devinder): confirm live / not live at submission and record the activation checks.
+Phase 4 (worker) is live (6 Nov): #36, #37 (replay), #39 (staged infrastructure) and #40
+(activation) are merged. Two workers run with a pool of five connections each. Their NetworkPolicy
+was applied and checked before activation, including the isolated address-exclusion test. Live
+checks showed valid signatures on 500, 500, 200 → delivered with three attempts; a failing delivery
+became dead after five tries, replay returned 202 with attempts reset to zero, and it tried again.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·

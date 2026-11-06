@@ -5,7 +5,7 @@
 A webhook is an HTTP request that tells another app something happened, such as `invoice.paid`.
 The receiver can be down, receive duplicates, or need proof of who sent the message.
 Relay accepts events, saves deliveries in Postgres, and provides delivery history through its API.
-The Phase 4 worker adds signed background delivery and retries; its live state is still to confirm.
+The Phase 4 worker is live, with signed background delivery, retries and replay.
 This is our exam project for Chas Academy's *Avancerad fullstackutveckling, test och DevOps*.
 
 ## Addresses
@@ -19,16 +19,17 @@ This is our exam project for Chas Academy's *Avancerad fullstackutveckling, test
 
 ## How it works
 
-The API through saving the queue is live. The worker flow below is built and tested in
-[#36](https://github.com/devinder-dev/relay/pull/36), which is still open.
-TODO(Devinder): confirm whether the worker is live or not live at submission.
+The API, worker and replay are live. Worker code
+[#36](https://github.com/devinder-dev/relay/pull/36) and replay
+[#37](https://github.com/devinder-dev/relay/pull/37) are merged. The worker was activated on
+6 Nov with two replicas and a database pool of five connections per worker.
 
 ```mermaid
 flowchart LR
     P[Producer] --> T[Traefik]
     T --> A[API pods]
     A --> Q[(Postgres queue)]
-    Q -. Phase 4 activation pending confirmation .-> W[Worker]
+    Q --> W[Worker]
     W --> R[Receiver]
 ```
 
@@ -43,7 +44,7 @@ flowchart LR
    sends a POST with a 10-second deadline. Each try gets a fresh signature.
 5. A 2xx response means delivered. Other responses, redirects and connection failures use the
    retry schedule with jitter, a small random change to each wait. The default allows eight tries
-   over about 21 hours; exhausted deliveries become `dead` and can be replayed once #37 is live.
+   over about 21 hours; exhausted deliveries become `dead` and can be replayed.
 6. The result changes delivery state only if its `lease_id` still matches. This fencing token
    prevents an old worker from overwriting a newer claim. An expired lease makes unfinished work
    eligible again.
@@ -102,13 +103,16 @@ These are recorded checks, not a fresh production audit.
 | Check | Traffic and result | What it proves and its limit |
 |---|---|---|
 | Deploy, 29 Oct | ApacheBench (`ab`), 20 concurrent connections, keep-alive, 300 seconds to `/health/live`: **76,466 requests, 0 failed** | Health requests stayed available during the rollout; not event-delivery throughput |
-| Automatic rollback, 29 Oct | `ab`, 20 concurrent connections, keep-alive, 420 seconds: **119,824 requests, 0 failed**. A separate `/version` loop never saw the bad version | A deliberately missing image triggered rollback. TODO(Devinder): confirm the `ab` endpoint for this run; the saved rollback extract omits it |
+| Automatic rollback, 29 Oct | `ab`, 20 concurrent connections, keep-alive, 420 seconds: **119,824 requests, 0 failed**. A separate `/version` loop never saw the bad version | A deliberately missing image triggered rollback. The saved rollback log doesn't record which endpoint `ab` used (the deploy test used `/health/live`) |
 | Postgres restart, 2 Nov | `ab`, 20 concurrent connections, keep-alive, 150 seconds to `/health/ready`: **49,192 requests, 0 failed**. All 318 separate readiness checks returned 200 | API pods stayed ready with zero restarts during about three seconds of database downtime. The linked load script confirms `ab`; no database-backed route was exercised |
-| NetworkPolicy probe, 6 Nov | On a temporary probe pod, the Kubernetes API and our VPS changed from reachable to timeout after applying an egress policy. Public HTTPS and Postgres stayed reachable | Outgoing network filtering worked. The plan still requires an isolated `ipBlock.except` test before worker activation; the Service-IP result may be due to the port rule |
-| Core API outside checks, 4 Nov | Six SSRF destinations refused with 422; missing-key requests gave 401; cdn CORS preflight gave 204 and an allow-origin header, an untrusted origin got none | SSRF (server-side request forgery) checks prevent registering internal destinations. CORS controls which browser origins may read responses. These checks do not prove worker delivery |
+| Worker NetworkPolicy activation checks, 6 Nov | After the policy was applied by hand and before the worker ran, a pod with the worker's label reached the demo receiver through its Service name on port 80 (200) and example.com (200). The Kubernetes API and a dashboard pod were refused (curl exit 7) | The worker's outgoing rules allowed the demo receiver and public HTTPS while refusing these internal destinations |
+| Isolated NetworkPolicy probe E, 6 Nov | Public HTTPS answered with the worker's rules, was refused after adding only that destination to `ipBlock.except`, then answered again after removing the exception | The address-exclusion rule was isolated and verified. The controller rejects denied traffic (curl exit 7), rather than dropping it |
+| Signed retry to success, 6 Nov | Our internal demo endpoint received `demo.ping` with `fail: 2`: 500, 500, 200; delivery became `delivered` with `attempts: 3`. All three receiver requests had valid Standard Webhooks signatures | Signed delivery and retry to success worked against our own receiver inside the cluster; not an external receiver or capacity test |
+| Dead delivery and replay, 6 Nov | `demo.ping` with `fail: 99` became `dead` after five tries on the demo schedule. Replay returned 202, `pending`, `attempts: 0`, then tried again. A malformed replay id returned 404 | Retry exhaustion and replay worked live; no claim that the always-failing delivery eventually succeeded |
+| Core API outside checks, 4 Nov | Six SSRF destinations refused with 422; missing-key requests gave 401; cdn CORS preflight gave 204 and an allow-origin header, an untrusted origin got none | SSRF (server-side request forgery) checks prevent registering internal destinations. CORS controls which browser origins may read responses. These checks do not prove worker delivery; the six SSRF attack URLs still returned 422 after #36 |
 
 The load came from one laptop. Deploy traffic used a health endpoint, alongside separate
-version checks; the rollback load endpoint still needs confirmation. These are availability checks, not a capacity benchmark. A k6 capacity test is
+version checks; the rollback log doesn't record its load endpoint. These are availability checks, not a capacity benchmark. A k6 capacity test is
 still to come. The Postgres test proves readiness behavior, not successful writes during an outage.
 
 ## Security
@@ -119,7 +123,8 @@ still to come. The Postgres test proves readiness behavior, not successful write
   HTTP demo receiver; customers cannot change that list.
 - Phase 4 pins each connection to the address it just checked, closing the DNS-rebinding gap
   where a name changes address between check and connection. NetworkPolicy adds outgoing
-  filtering; the probe is recorded above, and worker policy installation still needs confirmation.
+  filtering; the worker's policy was installed before activation and checked from a pod carrying
+  the worker's label, including the isolated address-exclusion test above.
 - Phase 4 uses Standard Webhooks signatures (HMAC-SHA256) so receivers can verify the sender and
   body. Receivers must verify send time and deduplicate event ids.
 - Namespace `relay` enforces Pod Security `restricted`: pods cannot run privileged or as root.
@@ -178,27 +183,29 @@ not turn them into a live API client.
 |---|---|---|
 | API unit | Configuration, validation and pure helpers | In `api/`: `bun run test:unit` and `bun run typecheck` |
 | Real Postgres integration | Schema constraints, authentication, owner isolation, endpoint limits, event transactions, idempotency races and delivery reads | In `api/`, with Docker running: `bun run db:up`, then `bun run test:db` (also runs unit tests) |
-| Phase 4 worker and replay | Signing, pinned transport, retries, leases, shutdown, receiver verification and replay conflicts | Same API commands on the respective #36/#37 branches; these tests are not yet on this branch |
+| Phase 4 worker and replay | Signing, pinned transport, retries, leases, shutdown, receiver verification and replay conflicts | In `api/`: `bun run test:db`; worker and replay tests are now on `main` and this branch |
 | Playwright end-to-end | A real browser exercises the dashboard's mock-data flows | In `dashboard/`: `npx playwright install chromium`, then `npm run test:e2e`; Playwright starts Vite itself |
 | Deploy-script harness | Deployment gates, migrations, failures and rollback using fake commands, without a server | From repo root: `bash infra/server/test-relay-deploy.sh infra/server/relay-deploy.sh` |
-| Image smoke tests | Migrations run twice inside the built API image; dashboard serves its HTML and JavaScript bundle | Run by [the pipeline](.github/workflows/pipeline.yml). #36 adds signed and tampered requests against the receiver in the production image |
+| Image smoke tests | Migrations run twice inside the built API image; dashboard serves its HTML and JavaScript bundle | Run by [the pipeline](.github/workflows/pipeline.yml). Merged #36 added signed and tampered requests against the receiver in the production image |
 
 ## Status and what's not done yet
 
 Phase 3 is live: API-key authentication, endpoint registration with SSRF checks and a 20-endpoint
 limit, idempotent events, delivery reads and CORS. The dashboard is served on cdn with mock data.
 
-Phase 4 worker code is built and tested in [#36](https://github.com/devinder-dev/relay/pull/36);
-replay is built and tested in [#37](https://github.com/devinder-dev/relay/pull/37). Both PRs are
-open. Activation is staged: deploy replay and create the demo endpoint and Secret, deploy the
-receiver and worker at zero replicas, apply and check the worker's NetworkPolicy, then activate
-two workers in a separate release. That gives rollback a known release that stops the worker.
-TODO(Devinder): live / not live at submission; record which activation steps and outside delivery
-checks have passed, including the isolated NetworkPolicy exception check.
+Phase 4 is live (6 Nov): worker code [#36](https://github.com/devinder-dev/relay/pull/36),
+replay and the demo origin [#37](https://github.com/devinder-dev/relay/pull/37), staged worker
+and receiver infrastructure [#39](https://github.com/devinder-dev/relay/pull/39), and worker
+activation [#40](https://github.com/devinder-dev/relay/pull/40) are merged and live. The worker
+was staged at zero replicas, its NetworkPolicy applied and checked by hand, then activated with
+two replicas and a pool of five connections per worker. Live checks proved signed retry to
+success, five-try exhaustion, replay and the isolated NetworkPolicy exception rule.
+The stop switch was tested live: scaling the worker to zero removed both pods, and scaling back
+to two brought two running workers back (`kubectl -n relay scale deployment/relay-worker`).
 
-The production demo configuration uses a short retry schedule, `5s,30s,2m,10m`, while grading.
-This is the planned configuration, not evidence it is active. The code default remains eight
-tries over about 21 hours (`5s,1m,5m,30m,2h,6h,12h` between tries, with jitter).
+The production demo configuration uses a short retry schedule, `5s,30s,2m,10m`, while grading:
+five tries before `dead`. The code default remains eight tries over about 21 hours
+(`5s,1m,5m,30m,2h,6h,12h` between tries, with jitter).
 
 Not implemented here: `DELETE /v1/endpoints/:id`, application metrics from the worker, and
 autoscaling (VG3). The delete route in the contract describes intended behavior. Real API wiring
@@ -215,8 +222,7 @@ also remain to be completed or documented.
 - [0006: Forward-only migrations](docs/decisions/0006-migrations-expand-contract.md) — add compatible schema first and remove old fields only in later releases.
 - [0007: Idempotent events](docs/decisions/0007-idempotency-unique-constraint.md) — a unique constraint prevents duplicates; a separate read sees the committed winner.
 
-Worker transport decision 0008 is part of open [#36](https://github.com/devinder-dev/relay/pull/36).
-It replaces decision 0002's proposed worker transport with a checked, pinned connection.
+- [0008: Worker transport](docs/decisions/0008-worker-transport.md) — merged in #36; replaces decision 0002's proposed worker transport with a checked, pinned connection.
 
 ## Team
 
