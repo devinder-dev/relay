@@ -69,3 +69,34 @@ test('a malformed body never throws', () => {
     assert.equal(f.requestId, null)
   }
 })
+
+// A 422 is the only answer that carries `details`: one entry per field that failed
+// (docs/api.md). The Add endpoint form puts each message next to its own input, so these
+// have to survive the trip rather than being flattened into one sentence.
+test('a 422 carries its per-field details', () => {
+  const f = toFailure({
+    status: 422,
+    body: {
+      error: {
+        code: 'validation_failed', message: 'The request body failed validation', request_id: 'req_9',
+        details: [{ path: 'url', message: 'must be an https URL' }, { path: 'name', message: 'must be 1 to 100 characters' }],
+      },
+    },
+  })
+  assert.deepEqual(f.details, [
+    { path: 'url', message: 'must be an https URL' },
+    { path: 'name', message: 'must be 1 to 100 characters' },
+  ])
+})
+
+test('every other failure has an empty details list, never undefined', () => {
+  assert.deepEqual(toFailure({ status: 401, body: apiError('unauthorized', 'nope') }).details, [])
+  assert.deepEqual(toFailure({ status: null, body: undefined }).details, [])
+})
+
+test('junk in details is dropped rather than handed to a form', () => {
+  for (const details of ['nope', 42, {}, [null], [{ path: 'url' }], [{ message: 'no path' }], [{ path: 1, message: 2 }]]) {
+    const f = toFailure({ status: 422, body: { error: { code: 'validation_failed', message: 'bad', details } } })
+    assert.deepEqual(f.details, [], `details should be empty for ${JSON.stringify(details)}`)
+  }
+})

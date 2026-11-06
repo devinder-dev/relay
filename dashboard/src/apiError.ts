@@ -18,13 +18,33 @@ export type ApiFailure = {
   requestId: string | null
   /** true = forget the stored key and send the user back to the Connect screen. */
   signOut: boolean
+  /**
+   * 422 only: one entry per field that failed, so a form can put each message next to its
+   * own input instead of in one lump (docs/api.md). Empty for every other failure, so
+   * callers can map over it without checking first.
+   */
+  details: { path: string; message: string }[]
+}
+
+// Only entries that are actually {path, message} strings reach a form. A half-built entry
+// would render as "undefined" next to an input, which is worse than saying nothing.
+function toDetails(raw: unknown): { path: string; message: string }[] {
+  if (!Array.isArray(raw)) return []
+  const kept = raw.filter(
+    (entry): entry is { path: string; message: string } =>
+      typeof (entry as { path?: unknown })?.path === 'string' &&
+      typeof (entry as { message?: unknown })?.message === 'string',
+  )
+  return kept.length === raw.length ? kept.map((e) => ({ path: e.path, message: e.message })) : []
 }
 
 export function toFailure(input: { status: number | null; body: unknown }): ApiFailure {
   // Read the three fields one at a time, checking each really is a string. A body that
   // isn't our shape - HTML from Traefik, a bare string, nothing at all - leaves all three
   // null, and the defaults below take over. Nothing here can throw on a strange body.
-  const body = input.body as { error?: { code?: unknown; message?: unknown; request_id?: unknown } } | null
+  const body = input.body as
+    | { error?: { code?: unknown; message?: unknown; request_id?: unknown; details?: unknown } }
+    | null
   const code = typeof body?.error?.code === 'string' ? body.error.code : null
   const message = typeof body?.error?.message === 'string' ? body.error.message : null
   const requestId = typeof body?.error?.request_id === 'string' ? body.error.request_id : null
@@ -37,6 +57,7 @@ export function toFailure(input: { status: number | null; body: unknown }): ApiF
       message: 'Could not reach Relay. Check your connection and try again.',
       requestId: null,
       signOut: false,
+      details: [],
     }
   }
 
@@ -48,5 +69,6 @@ export function toFailure(input: { status: number | null; body: unknown }): ApiF
     message: message ?? `Relay answered ${input.status}. Please try again.`,
     requestId,
     signOut: input.status === 401,
+    details: toDetails(body?.error?.details),
   }
 }
