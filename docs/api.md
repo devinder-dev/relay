@@ -149,6 +149,8 @@ After a replay of a dead delivery with eight finished tries, `attempts` is 0 and
 
 **Endpoint `status`** is worked out when the list is read, from the endpoint's latest delivery:
 `failing` if its latest delivery is `dead`, or is `pending` after a failed try; otherwise `active`.
+A replayed delivery keeps `last_status_code`, so a retained failure response keeps its endpoint
+`failing` until the next try succeeds.
 Deleted endpoints aren't listed at all.
 
 ## What Relay sends to your endpoint

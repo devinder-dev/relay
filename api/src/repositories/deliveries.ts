@@ -71,8 +71,11 @@ export async function listAttempts(db: Sql, ownerId: string, deliveryId: string)
     WHERE a.delivery_id = ${deliveryId} ORDER BY a.started_at, a.id`;
 }
 
-// Step 4: the lock makes the replay decision and update one step. A worker claim skips it;
-// an old worker finishing after replay finds its lease gone and changes no delivery state.
+// Step 4: the lock makes the delivery status/lease decision and update one step;
+// a waiting replay re-reads the locked delivery row. endpoint_deleted uses the endpoints row
+// as of the statement's start, without locking it: that would block other deliveries for it.
+// A deletion committed while replay waits can be missed; the worker's next claim then marks
+// the delivery dead with endpoint_deleted and sends nothing.
 export async function lockForReplay(tx: postgres.TransactionSql, ownerId: string, id: string) {
   const [row] = await tx<{
     status: DeliveryRow["status"]; endpoint_deleted: boolean; in_flight: boolean;
