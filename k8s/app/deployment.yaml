@@ -60,6 +60,10 @@ spec:
                 secretKeyRef:
                   name: relay-db
                   key: url
+            # The one operator exception to the SSRF rules (Phase 4): the demo receiver inside the
+            # cluster. Exact origin only; customers can't change this list.
+            - name: SSRF_ALLOW_ORIGINS
+              value: "http://relay-demo-receiver.relay.svc.cluster.local"
           # startup: "has it finished starting?" Runs first, alone; liveness and readiness wait
           # until it has passed once. 45 × 2 s = 90 s: more than the API's own 60 s wait for
           # the database, so the API gives up first, with a clear log line, instead of being

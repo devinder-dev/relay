@@ -1,6 +1,6 @@
 // Maps database rows to public delivery pages and delivery history.
 import type { Sql } from "../db.ts";
-import { notFound } from "../errors.ts";
+import { conflict, notFound } from "../errors.ts";
 import * as repository from "../repositories/deliveries.ts";
 
 // Step 1: explicitly map public fields, including nullable values and ISO timestamps.
@@ -34,4 +34,20 @@ export async function getDelivery(sql: Sql, ownerId: string, id: string) {
       status_code: a.status_code, error: a.error, response_excerpt: a.response_excerpt,
     })),
   };
+}
+
+// Step 3: check conflicts in contract order while holding only this owner's delivery lock.
+export async function replayDelivery(sql: Sql, ownerId: string, id: string) {
+  return sql.begin(async (tx) => {
+    const row = await repository.lockForReplay(tx, ownerId, id);
+    if (!row) throw notFound("Delivery");
+    if (row.status === "delivered") throw conflict("already_delivered", "This delivery was already delivered");
+    if (row.endpoint_deleted) throw conflict("endpoint_deleted", "This delivery's endpoint was deleted");
+    if (row.in_flight) throw conflict("in_flight", "This delivery is being sent right now, try again in a moment");
+    await repository.replayDelivery(tx, ownerId, id);
+    // Read before commit: a worker could otherwise claim it first and make the answer show attempts 1.
+    const replayed = await repository.getDeliveryRow(tx, ownerId, id);
+    if (!replayed) throw new Error("Replayed delivery could not be read");
+    return delivery(replayed);
+  });
 }

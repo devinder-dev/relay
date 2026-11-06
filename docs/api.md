@@ -149,6 +149,8 @@ After a replay of a dead delivery with eight finished tries, `attempts` is 0 and
 
 **Endpoint `status`** is worked out when the list is read, from the endpoint's latest delivery:
 `failing` if its latest delivery is `dead`, or is `pending` after a failed try; otherwise `active`.
+A replayed delivery keeps `last_status_code`, so a retained failure response keeps its endpoint
+`failing` until the next try succeeds.
 Deleted endpoints aren't listed at all.
 
 ## What Relay sends to your endpoint
@@ -254,12 +256,16 @@ Query: `status` (optional, a `DeliveryStatus`), `endpoint_id` (optional), `limit
 
 ### `POST /v1/deliveries/:id/replay`
 
+The request needs no body (send none, or `{}`). A malformed id answers 404.
+
 Allowed when the delivery is `dead`, or `pending` and not being sent right now ("retry now"),
 and its endpoint isn't deleted.
 
 202 → `Delivery` as it is after the replay: `status: "pending"`, `attempts: 0`,
 `next_attempt_at` ≈ now, `last_error: null`. The dashboard then reloads the detail screen.
 Errors: 401, 404, 409 `already_delivered`, 409 `in_flight`, 409 `endpoint_deleted`.
+When several 409 conditions apply, the order is `already_delivered`, then `endpoint_deleted`,
+then `in_flight`.
 
 The dashboard can't know in advance that a worker is sending the delivery right now (that window is
 a few seconds at most), so the Replay button simply tries. On 409 `in_flight` it says the delivery is
