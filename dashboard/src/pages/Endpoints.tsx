@@ -128,15 +128,27 @@ export default function Endpoints() {
     setSaving(true)
 
     try {
-      // The answer carries the signing secret, and nothing else ever will. The list is read
-      // back from the API rather than appended to here, so what is on screen is what the
-      // API would send on the next visit - including the status it worked out.
+      // The answer carries the signing secret, and nothing else ever will.
       const created = await createEndpoint({ name: trimmedName, url: url.trim() })
 
+      // The endpoint exists from here on, so the refresh gets its own try. Letting a failed
+      // list read fall into the catch below would put "create failed" under the form while
+      // the secret is still on screen, and the obvious response to that is to add the
+      // endpoint a second time.
       setSecret(created)
       setName('')
       setUrl('')
-      setRows(await listEndpoints())
+      try {
+        // Read the list back rather than appending, so what is on screen is what the API
+        // would send on the next visit, including the status it worked out.
+        setRows(await listEndpoints())
+      } catch {
+        // Show the row we were just given. Without its secret: the list the API returns
+        // never carries one, and nothing should keep a copy longer than the box that shows it.
+        // The underscore says the secret is being dropped on purpose, not forgotten.
+        const { signing_secret: _dropped, ...row } = created
+        setRows((current) => [...(current ?? []), row])
+      }
     } catch (failure: unknown) {
       setError(describe(failure as ApiFailure))
     } finally {

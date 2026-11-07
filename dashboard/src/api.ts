@@ -52,7 +52,11 @@ client.interceptors.response.use(
   (error: unknown) => {
     const response = axios.isAxiosError(error) ? error.response : undefined
     const failure = toFailure({ status: response?.status ?? null, body: response?.data })
-    if (failure.signOut) sessionStorage.removeItem('relay_key')
+    if (failure.signOut) {
+      sessionStorage.removeItem('relay_key')
+      // The prefix as well, or the header goes on showing the key that was just refused.
+      sessionStorage.removeItem('relay_key_prefix')
+    }
     return Promise.reject(failure)
   },
 )
