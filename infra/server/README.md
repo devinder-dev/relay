@@ -159,7 +159,10 @@ multipart upload above 8 MiB, and multipart needs rights this key deliberately l
 would work while the database is small and fail with `AccessDenied` the first night a dump
 passed 8 MiB. `put-object` sends the file in one request, up to 5 GB, whatever its size; past
 5 GB, the key's rights have to be redesigned, not just the command. Today's dump is about 17 KB.
-Large upload with the real key (one 10 MiB file, same pod spec): <to fill in>.
+Large upload with the real key, 7 Nov 2026: one 10,485,760-byte file through the same pod spec
+and Secret went up in a single `put-object` with its VersionId and SHA-256 logged; the test
+object was then deleted, every version. A wrong database password, also tested that day, fails
+the dump (`password authentication failed`) and the upload container never starts.
 
 Dumps contain signing secrets, API-key hashes, payloads and receiver excerpts. The private bucket,
 SSE-S3 encryption and HTTPS protect storage and transport, not a compromised server or admin.
@@ -255,6 +258,11 @@ Commands below run on the laptop unless marked otherwise.
    Set `KEY` and `VER` below to its recorded key and VersionId. The checksum is also in that
    log. Restore that version **as `relay`**, never as the superuser.
 
+   **Run it in bash, not zsh** (zsh is the macOS default: type `bash` first). zsh's `MULTIOS`
+   option sends a redirected output to the pipe *as well*, so the CLI's JSON answer would be
+   mixed into the dump and `pg_restore` would fail. Found and tested on 7 Nov: in zsh,
+   `{ echo json; echo BODY >&3; } 3>&1 1>&2 | cat` passes both lines into the pipe; bash only `BODY`.
+
    ```bash
    B=myrelay-tech-db-backups
    KEY='<recorded key>'
@@ -307,7 +315,11 @@ Commands below run on the laptop unless marked otherwise.
    Expect `NotFound`. Measured time covers download plus restore only, not rebuilding a lost
    server, k3s, Secrets or DNS.
 
-Measured: <to fill in>
+Measured, 7 Nov 2026: the 14:46 UTC dump (`relay-backup-manual-1`, 17,851 bytes) restored as
+`relay` in **1.46 s**, download plus restore, `pg_restore` exit 0. The SHA-256 S3 returned matched
+the Job's log line. Every check matched production exactly: the same 7 tables, migration
+`20261031140445`, the same row counts in all six tables, the joins, 58 constraints, 16 indexes
+and the same delivery ids. The time grows with the database; today's is tiny.
 
 ### 6g. Restore into production (not rehearsed)
 
@@ -343,8 +355,8 @@ not rehearsed; stop on any failure, leaving traffic stopped until the checks pas
    SQL
    ```
 
-5. From the laptop, run the streaming command in 6f with the chosen `KEY` and `VER`, changing
-   only `relay-restore-drill` to `postgres-0`. Keep `set -o pipefail`, `--exit-on-error`,
+5. From the laptop, **in bash** (see 6f), run 6f's streaming command with the chosen `KEY` and
+   `VER`, changing only `relay-restore-drill` to `postgres-0`. Keep `set -o pipefail`, `--exit-on-error`,
    `--no-owner --no-acl` and `-U relay`. Never restore a dump as the superuser. If it fails,
    leave the app stopped and recreate the empty database before retrying.
 6. Run 6f's checks as `relay` against `postgres-0`, comparing with the chosen backup's drill
