@@ -153,7 +153,13 @@ The key can only upload under `relay/`: it cannot read, list or delete. A stolen
 junk (costing money) or overwrite an existing key. Versioning keeps the previous version for
 about 30 days after an overwrite, so we must notice within that window and recover by VersionId.
 Current dumps expire after about 30 days; noncurrent versions remain about 30 more days.
-One upload is limited to 5 GB; this is not a multipart upload.
+
+**The upload must stay `aws s3api put-object`, never `aws s3 cp`.** `s3 cp` switches to a
+multipart upload above 8 MiB, and multipart needs rights this key deliberately lacks, so backups
+would work while the database is small and fail with `AccessDenied` the first night a dump
+passed 8 MiB. `put-object` sends the file in one request, up to 5 GB, whatever its size; past
+5 GB, the key's rights have to be redesigned, not just the command. Today's dump is about 17 KB.
+Large upload with the real key (one 10 MiB file, same pod spec): <to fill in>.
 
 Dumps contain signing secrets, API-key hashes, payloads and receiver excerpts. The private bucket,
 SSE-S3 encryption and HTTPS protect storage and transport, not a compromised server or admin.
