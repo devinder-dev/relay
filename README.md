@@ -13,7 +13,7 @@ This is our exam project for Chas Academy's *Avancerad fullstackutveckling, test
 | Service | Address | What is there |
 |---|---|---|
 | API | https://api.myrelay.tech | Core API. [`/version`](https://api.myrelay.tech/version) shows the running commit |
-| Relay dashboard (static files on cdn) | https://cdn.myrelay.tech | Connect, delivery log, delivery detail and endpoints screens. Currently uses mock data, including the Connect check, rather than the real API |
+| Relay dashboard (static files on cdn) | https://cdn.myrelay.tech | Connect, delivery log, delivery detail and endpoints screens, reading and writing the real API. Paste an API key to see that owner's deliveries |
 | Ops dashboard (Grafana: metrics and logs) | No public address: reachable only over an SSH tunnel | Grafana, Prometheus, Loki and Alloy run in namespace `monitoring`. Its Service is ClusterIP with no Ingress, so nothing is published on `grafana.myrelay.tech`. Reach it with `ssh -L 3000:localhost:3000 relay`, then on the server `kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80`, and open `http://localhost:3000` |
 | Source | [devinder-dev/relay](https://github.com/devinder-dev/relay) | This repository |
 
@@ -87,9 +87,9 @@ the deploy account cannot delete. See [the manifest guide](k8s/README.md) and
 | Requirement | Status | Evidence (file, test or measurement) |
 |---|---|---|
 | G1: backend on our VPS over HTTPS | Done | [API Deployment](k8s/app/deployment.yaml), API address above, recorded outside checks on 4 Nov |
-| G2: static files served from cdn | Done | [Dashboard manifests](k8s/app/dashboard.yaml), merged [#24](https://github.com/devinder-dev/relay/pull/24) and [#30](https://github.com/devinder-dev/relay/pull/30); dashboard uses mock data |
+| G2: static files served from cdn | Done | [Dashboard manifests](k8s/app/dashboard.yaml), merged [#24](https://github.com/devinder-dev/relay/pull/24) and [#30](https://github.com/devinder-dev/relay/pull/30). The screens talk to the API ([#42](https://github.com/devinder-dev/relay/pull/42)) |
 | G3: every merge tested, built and deployed | Done | [Pipeline](.github/workflows/pipeline.yml), [deploy script](infra/server/relay-deploy.sh), deploy and rollback measurements below |
-| G4: unit, integration and end-to-end tests in the pipeline | Done | [Pipeline](.github/workflows/pipeline.yml), [API integration tests](api/test/integration/), [Playwright configuration](dashboard/playwright.config.ts); browser tests currently use mocks |
+| G4: unit, integration and end-to-end tests in the pipeline | Done | [Pipeline](.github/workflows/pipeline.yml). Unit: `bun test src` (API) and `node --test` (dashboard, in CI since [#42](https://github.com/devinder-dev/relay/pull/42)). Integration: [API tests against a real Postgres](api/test/integration/). End-to-end: [Playwright](dashboard/playwright.config.ts) drives a real browser over the real API client, with the requests answered in-browser from fixtures so row counts stay exact |
 | G5: daily database backups | Not done | Verified on the cluster: `kubectl get cronjob -A` returns nothing, and there is no Terraform or bucket in this repository. Only the plan in [server runbook, section 6](infra/server/README.md#6-data-postgres-step-23-backups-in-phase-6) exists. The 2 Nov deletion drill shows the volume survives a deleted claim, which is not a backup |
 | G6: metrics and logging | Mostly done | Live in namespace `monitoring` since 3 Nov, installed with Helm: kube-prometheus-stack 92.17.1 (Prometheus, Grafana, kube-state-metrics, node-exporter), Loki 20.2.2 and Alloy 1.15.0, all `Running`. Alloy ships pod logs to Loki, so the API's and the worker's JSON logs are centralised and searchable in Grafana - the worker's retry-to-dead cycle on 6 Nov was read back out of Loki. **Two gaps:** no application metrics (no `/metrics` endpoint, and no ServiceMonitor targets our pods, so only cluster and node metrics are scraped), and the Helm values are not in git, so this is the one part of the system the repository cannot rebuild |
 | VG1: at least two instances behind a load balancer | Done | Two API pods behind Traefik in [Deployment](k8s/app/deployment.yaml) and [Ingress](k8s/app/ingress.yaml); one VPS remains a single point of failure |
@@ -109,6 +109,7 @@ These are recorded checks, not a fresh production audit.
 | Isolated NetworkPolicy probe E, 6 Nov | Public HTTPS answered with the worker's rules, was refused after adding only that destination to `ipBlock.except`, then answered again after removing the exception | The address-exclusion rule was isolated and verified. The controller rejects denied traffic (curl exit 7), rather than dropping it |
 | Signed retry to success, 6 Nov | Our internal demo endpoint received `demo.ping` with `fail: 2`: 500, 500, 200; delivery became `delivered` with `attempts: 3`. All three receiver requests had valid Standard Webhooks signatures | Signed delivery and retry to success worked against our own receiver inside the cluster; not an external receiver or capacity test |
 | Dead delivery and replay, 6 Nov | `demo.ping` with `fail: 99` became `dead` after five tries on the demo schedule. Replay returned 202, `pending`, `attempts: 0`, then tried again. A malformed replay id returned 404 | Retry exhaustion and replay worked live; no claim that the always-failing delivery eventually succeeded |
+| Dashboard over the real API, 7 Nov | On https://cdn.myrelay.tech with a real key: the delivery log, the detail screen and the endpoints screen all read production. An endpoint created through the form answered `POST /v1/endpoints` **201**; an event sent by `curl` answered **202**; the worker then retried it against a receiver that refuses POST (405) on the demo schedule, and Replay from the detail screen reset it to `attempts: 0`. Status codes read from the API pod's own log, not from the browser | The dashboard and the API agree on the contract in production, not only in tests. Not a capacity test, and one owner's data only |
 | Core API outside checks, 4 Nov | Six SSRF destinations refused with 422; missing-key requests gave 401; cdn CORS preflight gave 204 and an allow-origin header, an untrusted origin got none | SSRF (server-side request forgery) checks prevent registering internal destinations. CORS controls which browser origins may read responses. These checks do not prove worker delivery; the six SSRF attack URLs still returned 422 after #36 |
 
 The load came from one laptop. Deploy traffic used a health endpoint, alongside separate
@@ -174,8 +175,15 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173`. The current screens use mock fixtures; entering a real API key does
-not turn them into a live API client.
+Open `http://localhost:5173`. Vite forwards `/v1` to an API, so the app is same-origin while
+developing and CORS never applies; the default target is an API on this machine. To work against
+production instead, say so explicitly - and note that it reads and writes real data:
+
+```sh
+RELAY_API=https://api.myrelay.tech npm run dev
+```
+
+Paste an API key and the screens show that owner's real endpoints and deliveries.
 
 ## Tests
 
@@ -184,14 +192,15 @@ not turn them into a live API client.
 | API unit | Configuration, validation and pure helpers | In `api/`: `bun run test:unit` and `bun run typecheck` |
 | Real Postgres integration | Schema constraints, authentication, owner isolation, endpoint limits, event transactions, idempotency races and delivery reads | In `api/`, with Docker running: `bun run db:up`, then `bun run test:db` (also runs unit tests) |
 | Phase 4 worker and replay | Signing, pinned transport, retries, leases, shutdown, receiver verification and replay conflicts | In `api/`: `bun run test:db`; worker and replay tests are now on `main` and this branch |
-| Playwright end-to-end | A real browser exercises the dashboard's mock-data flows | In `dashboard/`: `npx playwright install chromium`, then `npm run test:e2e`; Playwright starts Vite itself |
+| Playwright end-to-end | A real browser exercises the real API client. Playwright answers the requests in the browser from fixtures, so the shipped code runs while the row counts stay fixed and assertions can be exact | In `dashboard/`: `npx playwright install chromium`, then `npm run test:e2e`; Playwright starts Vite itself |
 | Deploy-script harness | Deployment gates, migrations, failures and rollback using fake commands, without a server | From repo root: `bash infra/server/test-relay-deploy.sh infra/server/relay-deploy.sh` |
 | Image smoke tests | Migrations run twice inside the built API image; dashboard serves its HTML and JavaScript bundle | Run by [the pipeline](.github/workflows/pipeline.yml). Merged #36 added signed and tampered requests against the receiver in the production image |
 
 ## Status and what's not done yet
 
 Phase 3 is live: API-key authentication, endpoint registration with SSRF checks and a 20-endpoint
-limit, idempotent events, delivery reads and CORS. The dashboard is served on cdn with mock data.
+limit, idempotent events, delivery reads and CORS. The dashboard is served on cdn and reads and
+writes the real API ([#42](https://github.com/devinder-dev/relay/pull/42)).
 
 Phase 4 is live (6 Nov): worker code [#36](https://github.com/devinder-dev/relay/pull/36),
 replay and the demo origin [#37](https://github.com/devinder-dev/relay/pull/37), staged worker
@@ -227,6 +236,6 @@ also remain to be completed or documented.
 ## Team
 
 - **Devinder Singh:** backend, database and infrastructure; core API, deploy pipeline, namespace guards and rollout/rollback tests (for example #13–17, #21–22, #26–27 and #31–35).
-- **Abdikhani Mohamed:** frontend and quality; dashboard types, mock-data screens, toolchain, manifests, image pipeline and browser tests (#2, #7, #9, #23–24, #28 and #30).
+- **Abdikhani Mohamed:** frontend and quality; dashboard types and screens, the API client and its error handling, toolchain, manifests, image pipeline, unit and browser tests (#2, #7, #9, #23–24, #28, #30 and #42).
 
 Every PR was reviewed by the other. Both must be able to explain the whole system.

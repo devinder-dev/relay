@@ -195,7 +195,13 @@ Tested live:
 
 Phase 3 (core API) is done and live (4 Nov): API-key auth, endpoints with the SSRF check
 and a 20-endpoint limit, events with idempotency, delivery reads and CORS. The dashboard is
-live on https://cdn.myrelay.tech; its screens still use mock data, not the real API.
+live on https://cdn.myrelay.tech.
+
+Phase 5 (the dashboard on cdn) is done (7 Nov): all four screens read and write the real API
+through one axios client, with one place deciding what each kind of failure means
+(#42). Checked on the deployed site with a real key: an endpoint created through the form,
+an event sent by curl, the worker's retries visible as they happened, and Replay resetting the
+delivery. `src/mockStore.ts` is gone and no fixture data ships in the bundle.
 
 Phase 4 (worker) is live (6 Nov): #36, #37 (replay), #39 (staged infrastructure) and #40
 (activation) are merged. Two workers run with a pool of five connections each. Their NetworkPolicy
