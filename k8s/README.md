@@ -4,7 +4,7 @@ How each folder gets onto the cluster, and who may apply it.
 
 | Folder | What's in it | Applied by |
 |---|---|---|
-| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay`, the worker's NetworkPolicy and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
+| `k8s/platform/` | Cluster setup: Let's Encrypt issuers, Traefik settings, the `relay` namespace (with its Pod Security level), the `deployer` account, the Service policy for `relay`, the worker's NetworkPolicy, the API's autoscaler and the StorageClass `local-path-retain` | One of us, by hand, after the PR is reviewed |
 | `k8s/data/` (from step 2.3) | Postgres: its Service and StatefulSet (`postgres.yaml`) and its first-start script (`initdb/`). Later also the backup CronJob (Phase 6) | One of us, by hand, after the PR is reviewed. **Never the pipeline**: the `deployer` account can't create StatefulSets or Secrets, so a merged PR can't change the database's version or its disk. Order and recovery: [`infra/server/README.md`](../infra/server/README.md), section 6 |
 | `k8s/migrate/` (from step 2.4) | The migrate Job: runs the commit's database migrations (dbmate) once per deploy | Only `relay-deploy`, with `kubectl create` (never `apply`: every deploy gets a fresh Job name), **before** `k8s/app/`. Kubernetes deletes finished Jobs after 1 hour, because the `deployer` account can't delete |
 | `k8s/app/` (from step 1.7) | Our app in namespace `relay`, the API, dashboard, worker and demo receiver: Deployments, Services, Ingresses, ConfigMaps | Only the pipeline, through `relay-deploy` |
@@ -70,6 +70,34 @@ The worker's production manifest temporarily uses the short exam demo retry sche
 
 **Stop switch (admin only):** `kubectl -n relay scale deployment/relay-worker --replicas=0`.
 The next deploy restores what git says, so follow a lasting manual stop with a PR.
+
+## The API's autoscaler
+
+`k8s/platform/api-hpa.yaml` decides how many API pods run: 2 when idle, up to 4 when the average
+pod uses more than 70% of its CPU request (100m, so 70m). It is a platform file because the
+pipeline's account cannot create or change autoscalers, so a merged PR can never widen or remove
+these limits.
+
+`k8s/app/deployment.yaml` therefore has **no `replicas:` field**, and must not get one back:
+every deploy would overwrite whatever the autoscaler had decided.
+
+**Order:** apply this file *before* merging the PR that removes `replicas:` from
+`k8s/app/deployment.yaml`, and before the app manifests on a rebuild.
+
+`kubectl apply` deletes a field that it applied last time and is missing now, so the first deploy
+after that merge sets the count to **1**. Measured, not assumed: with the live Deployment running
+2 pods, `apply --dry-run=server -o jsonpath={.spec.replicas}` on the field-less manifest answered
+`1`. The autoscaler repairs it within about 15 s because `minReplicas` is 2 - but only if it is
+already there. Without it, the API stays on one pod and VG1 (two instances behind a load
+balancer) is quietly broken, with nothing failing to say so.
+
+So, after the first deploy following that merge, check `kubectl -n relay get deploy relay-api`
+and expect 2.
+
+**Checking it:** `kubectl -n relay get hpa` shows the current and target CPU and the pod count.
+It needs metrics-server, which k3s runs by default; `kubectl -n relay top pods` proves it is
+answering. With no load the API sits at about 1% of its request, so the count stays at 2 until
+something pushes it.
 
 ## Applying a platform file
 

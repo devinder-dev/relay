@@ -1,0 +1,56 @@
+# Autoscaling for the API (VG3). A HorizontalPodAutoscaler watches how busy the pods are and
+# changes how many there are: 2 when nothing is happening, up to 4 under load.
+#
+# Why this is a platform file, applied by hand: the pipeline's Kubernetes account cannot create
+# or change autoscalers (checked: `auth can-i create horizontalpodautoscalers` answers no), so a
+# merged pull request can never quietly widen or remove these limits. Same reasoning as the
+# worker's NetworkPolicy.
+#
+# Order matters, and more than it first looks. Apply this BEFORE merging the change that removes
+# `replicas:` from k8s/app/deployment.yaml. `kubectl apply` deletes a field it applied last time
+# and no longer sees, so that first deploy sets the count to 1 - checked with
+# `apply --dry-run=server -o jsonpath={.spec.replicas}`, which answered 1 while the live
+# Deployment was running 2. This autoscaler is what repairs it, within about 15 s, because
+# minReplicas is 2. Without it first, the API would sit on ONE pod and VG1 (two instances
+# behind a load balancer) would be quietly broken.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: relay-api
+  namespace: relay
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: relay-api
+  # The floor is the VG1 requirement, not a performance choice: two pods behind Traefik is what
+  # makes a rollout zero-downtime and survives one process dying.
+  minReplicas: 2
+  # Four on a 4-vCPU VPS: 4 x 100m of requests is 400m, well inside what the node has, and
+  # Postgres has the connections for it (4 pods x pool 5 = 20).
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          # Percent of the pod's CPU *request*, not of the node. The API requests 100m, so this
+          # adds a pod when the average pod is using more than 70m.
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    # Up quickly: a queue of webhook producers does not wait politely.
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    # Down slowly: five minutes of calm before removing a pod, so a spiky load does not make
+    # the pod count flap, and so a rollout is never fighting a scale-down.
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
