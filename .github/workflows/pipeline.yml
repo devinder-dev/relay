@@ -162,6 +162,9 @@ jobs:
       # "ci", never "install": it installs exactly what package-lock.json names, so CI
       # can never quietly resolve a version the laptop never tested.
       - run: npm ci
+      # Before the browser download, not after: these need no browser, and a failing unit
+      # test should not wait two minutes for Chromium first.
+      - run: npm run test:unit
       # The runner has no browser. Playwright installs the exact build its own version
       # expects, plus the system libraries Chromium needs.
       - name: Install Chromium for Playwright

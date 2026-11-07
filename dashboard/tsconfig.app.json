@@ -22,5 +22,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Unit tests run in Node, not the browser: they are type-checked by tsconfig.node.json,
+  // which has Node's types. Keeping them out here stops Node globals leaking into app code.
+  "exclude": ["src/**/*.test.ts"]
 }

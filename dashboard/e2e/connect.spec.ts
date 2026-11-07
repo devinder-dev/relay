@@ -2,14 +2,23 @@ import { expect, test } from './fixtures'
 
 // The gate in front of everything else: a key that works gets you in, one that
 // doesn't gets a message, and no key at all gets you sent back.
+//
+// The message is the API's own wording, from api/src/errors.ts. src/mocks.ts used to guess
+// at it, and this test asserted the guess.
 
-test('a key the API would reject shows the error from the contract', async ({ page }) => {
-  await page.goto('/')
-  await page.getByLabel('API key').fill('nope')
-  await page.getByRole('button', { name: 'Connect' }).click()
+// Only this test sends a key the API refuses, so only this test expects the browser's own
+// note about the 401. The other two keep the strict console guard.
+test.describe('a refused key', () => {
+  test.use({ expectedConsoleErrors: [/Failed to load resource.*401/] })
 
-  await expect(page.getByText('Unknown or revoked API key')).toBeVisible()
-  await expect(page).toHaveURL('/')
+  test('shows the error from the contract', async ({ page }) => {
+    await page.goto('/')
+    await page.getByLabel('API key').fill('nope')
+    await page.getByRole('button', { name: 'Connect' }).click()
+
+    await expect(page.getByText('A valid API key is required')).toBeVisible()
+    await expect(page).toHaveURL('/')
+  })
 })
 
 test('a key that works lands on the delivery log', async ({ page }) => {

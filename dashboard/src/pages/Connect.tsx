@@ -1,29 +1,33 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { errorUnauthorized, me } from '../mocks'
-import type { Me } from '../types'
-
-// Stands in for GET /v1/me until the API exists. The real check is the same:
-// send the key, and let the API say whether it knows it.
-function check(key: string): Me | null {
-  return key.startsWith('relay_live_') ? me : null
-}
+import { checkKey, type ApiFailure } from '../api'
 
 export default function Connect() {
   const navigate = useNavigate()
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(false)
 
-  function connect(e: FormEvent) {
+  async function connect(e: FormEvent) {
     e.preventDefault()
+    setError(null)
+    setChecking(true)
 
-    const owner = check(key.trim())
-    if (!owner) return setError(errorUnauthorized.error.message)
+    try {
+      // The API decides whether a key is real; nothing here guesses from its shape. The
+      // prefix comes from the answer, because the API is what knows which key this is.
+      const owner = await checkKey(key.trim())
 
-    // The key stays in sessionStorage, not localStorage: it is gone when the tab
-    // closes, so a shared machine does not keep someone signed in.
-    sessionStorage.setItem('relay_key', key.trim())
-    navigate('/deliveries')
+      // The key stays in sessionStorage, not localStorage: it is gone when the tab
+      // closes, so a shared machine does not keep someone signed in.
+      sessionStorage.setItem('relay_key', key.trim())
+      sessionStorage.setItem('relay_key_prefix', owner.key.prefix)
+      navigate('/deliveries')
+    } catch (failure) {
+      // Every failure arrives as an ApiFailure with a message written for people.
+      setError((failure as ApiFailure).message)
+      setChecking(false)
+    }
   }
 
   return (
@@ -57,9 +61,10 @@ export default function Connect() {
 
         <button
           type="submit"
-          className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:opacity-90"
+          disabled={checking || key.trim() === ''}
+          className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
-          Connect
+          {checking ? 'Checking…' : 'Connect'}
         </button>
       </form>
 
