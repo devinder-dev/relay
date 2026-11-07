@@ -216,7 +216,8 @@ Still missing: application metrics (no `/metrics` endpoint), a published address
 ClusterIP, SSH tunnel only), and the Helm values in git, which today is the only part of the
 system this repository cannot rebuild.
 
-Phase 6 (backups) is done (7 Nov): the S3 bucket and an upload-only IAM user built with
+Phase 6 (backups) is built and restore-tested (7 Nov); its first scheduled run is 8 Nov at 03:00.
+It consists of the S3 bucket and an upload-only IAM user built with
 Terraform (#43), and a nightly `pg_dump` CronJob at 03:00 Europe/Stockholm (#46). The upload is a
 single `put-object`, never `aws s3 cp`, because the key may not do multipart. Proven by a timed
 drill: the recorded version downloaded by VersionId with its checksum checked, restored as `relay`

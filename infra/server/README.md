@@ -124,7 +124,9 @@ stored one to the new value, without the value ever leaving the server:
 
    For `postgres-auth`, use `\getenv pw POSTGRES_PASSWORD` and `ALTER ROLE postgres …`. Only admins
    can `exec`, and the local socket needs no password.
-4. `kubectl -n relay rollout restart deployment/relay-api`, so the API reads the new `url`.
+4. `kubectl -n relay rollout restart deployment/relay-api deployment/relay-worker`, so both read
+   the new `url`: environment variables are read only when a pod starts. The migrate Job and the
+   backup CronJob need nothing, because each new Job reads the Secret when it starts.
 5. Check a login from another pod (section 6).
 
 Tested on 31 Oct (locally, same image): the new password, containing `'`, `;`, `$` and `"`,
