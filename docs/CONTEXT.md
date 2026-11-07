@@ -211,7 +211,9 @@ became dead after five tries, replay returned 202 with attempts reset to zero, a
 
 Phase 7 (metrics and logs) is partly live, ahead of its place in the plan: kube-prometheus-stack,
 Loki and Alloy were installed with Helm into namespace `monitoring` on 3 Nov and are running.
-Logs from namespace `relay` are centralised and searchable in Grafana, the worker's included.
+Logs from namespace `relay`, the worker's included, are centralised in Loki and read back through its
+API. Searching them *in Grafana* needs a Loki datasource, which the chart does not provision - added
+in #44, and the one thing in that folder that has to be applied rather than only recorded.
 Still missing: application metrics (no `/metrics` endpoint), a published address (Grafana is
 ClusterIP, SSH tunnel only), and the Helm values in git, which today is the only part of the
 system this repository cannot rebuild.
