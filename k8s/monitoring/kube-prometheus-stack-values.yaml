@@ -15,6 +15,19 @@
 alertmanager:
   enabled: false
 grafana:
+  # Loki as a datasource, so logs can be searched in Grafana rather than only through Loki's own
+  # HTTP API. Provisioned here on purpose: added through the web interface it would live in
+  # Grafana's database on its volume, so it would be invisible to this repository and lost with
+  # the volume. `loki-gateway` on port 80 is the same address Alloy pushes to.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki-gateway.monitoring.svc.cluster.local
+      jsonData:
+        # Logs are kept 72 hours (see loki-values.yaml), so asking for more is pointless.
+        maxLines: 1000
   persistence:
     enabled: true
     size: 2Gi
