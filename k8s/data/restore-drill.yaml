@@ -10,6 +10,10 @@ metadata:
     app.kubernetes.io/name: relay-restore-drill
 spec:
   restartPolicy: Never
+  # The drill takes minutes. If it is abandoned (interrupted, a stream fails halfway, someone
+  # gets pulled away), Kubernetes stops the pod after 2 hours instead of keeping a copy of
+  # customer data running forever. Deleting it (runbook 6f, step 4) is still the normal end.
+  activeDeadlineSeconds: 7200
   automountServiceAccountToken: false
   enableServiceLinks: false  # avoid Kubernetes-made POSTGRES_* environment variables
   securityContext:

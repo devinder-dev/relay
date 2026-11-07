@@ -164,6 +164,10 @@ Large upload with the real key (one 10 MiB file, same pod spec): <to fill in>.
 Dumps contain signing secrets, API-key hashes, payloads and receiver excerpts. The private bucket,
 SSE-S3 encryption and HTTPS protect storage and transport, not a compromised server or admin.
 Never paste dump contents or secret-bearing SQL output into shared logs or a PR.
+**A `.dump` file is as sensitive as the database itself:** the signing-secret column is not
+encrypted, because we protect the backups instead (`docs/CONTEXT.md`). Never park one in
+Downloads, a shared folder or a chat; the drill streams it, and its fallback deletes the file
+straight after.
 
 From the repo root on the laptop, apply only the CronJob (not the drill Pod):
 
@@ -231,7 +235,8 @@ Secret before the next backup. Never delete the old key until the replacement's 
 ### 6f. Restore drill (timed)
 
 This is a temporary copy of production data. Delete it as soon as the drill is done, including
-when a check fails. Use admin AWS credentials on the laptop: the backup key cannot download.
+when a check fails. As a safety net, the Pod stops itself after 2 hours
+(`activeDeadlineSeconds`), so plan the drill to finish well inside that. Use admin AWS credentials on the laptop: the backup key cannot download.
 Commands below run on the laptop unless marked otherwise.
 
 1. Apply the Pod, wait for readiness, then create the role and empty database. Preparation is
