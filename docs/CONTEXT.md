@@ -44,8 +44,8 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
 - Secrets live only in **GitHub Actions secrets** or **Kubernetes Secrets**. Never in git.
 - The kubeconfig is an admin password. It stays on the server in `~/.kube/config`.
 - Ask the other person before any destructive command on the VPS, the database or DNS.
-- Never expose to the internet: Postgres (5432), the Kubernetes API (6443), `/metrics`
-  (served on its own port 9090, which no Ingress points to).
+- Never expose to the internet: Postgres (5432), the Kubernetes API (6443), Grafana (SSH tunnel
+  only). `/metrics` is not built yet; if it is, it gets its own port that no Ingress points to.
 - Endpoint URLs from customers must not point to internal, private or our own VPS addresses
   (SSRF). Checked when an endpoint is created **and** before every delivery attempt; redirects
   are never followed. **Known gap, closed in Phase 4: DNS rebinding.** A name can resolve to a
@@ -86,7 +86,7 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `GET /v1/endpoints` · `DELETE /v1/endpoints/:id` (soft delete) · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
 `GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
-`/metrics` on port 9090 only. Errors: `{"error":{"code","message","request_id"}}`. Another
+`/metrics` is **not implemented** (it was planned for port 9090 only, which no Ingress would point to). Errors: `{"error":{"code","message","request_id"}}`. Another
 owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
 Owners and API keys are created with a `create-owner` script (no signup page).
 **The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
@@ -115,7 +115,7 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 | Observability | Slim kube-prometheus-stack + Loki + Alloy (Promtail is end-of-life); Grafana Cloud free tier as fallback | Datadog |
 | Backups | Nightly CronJob: `pg_dump` → **Amazon S3** (eu-north-1), one timed restore | Volume snapshots, R2, B2 |
 | IaC | Kubernetes YAML and scripts in git; **Terraform only for the S3 backup bucket** and its IAM user | Terraform for everything (no provider for one.com or get.tech; Helm via Terraform needs 6443) |
-| Scaling / zero downtime | HPA on the API (2–4 pods, no `replicas:` field); workers fixed at 2; RollingUpdate maxUnavailable 0, readiness probe, preStop sleep, graceful SIGTERM | KEDA (stretch), blue-green |
+| Scaling / zero downtime | **Planned, never built:** an HPA on the API (2–4 pods, which would mean dropping `replicas:`). Today every Deployment pins its replicas by hand; workers fixed at 2; RollingUpdate maxUnavailable 0, readiness probe, preStop sleep, graceful SIGTERM | KEDA (stretch), blue-green |
 
 **Left out on purpose:** rate limiting per IP (Traefik sees every client as `10.42.0.1`),
 encrypting the signing-secret column (we protect the backups instead), OpenAPI tooling
@@ -193,7 +193,28 @@ Tested live:
 - **A rollback to Phase 1's release** (from before migrations existed) worked under load:
   123,904 requests, 0 failed.
 
-Next: Phase 3, the core API.
+Phase 3 (core API) is done and live (4 Nov): API-key auth, endpoints with the SSRF check
+and a 20-endpoint limit, events with idempotency, delivery reads and CORS. The dashboard is
+live on https://cdn.myrelay.tech.
+
+Phase 5 (the dashboard on cdn) is done (7 Nov): all four screens read and write the real API
+through one axios client, with one place deciding what each kind of failure means
+(#42). Checked on the deployed site with a real key: an endpoint created through the form,
+an event sent by curl, the worker's retries visible as they happened, and Replay resetting the
+delivery. `src/mockStore.ts` is gone and no fixture data ships in the bundle.
+
+Phase 4 (worker) is live (6 Nov): #36, #37 (replay), #39 (staged infrastructure) and #40
+(activation) are merged. Two workers run with a pool of five connections each. Their NetworkPolicy
+was applied and checked before activation, including the isolated address-exclusion test. Live
+checks showed valid signatures on 500, 500, 200 → delivered with three attempts; a failing delivery
+became dead after five tries, replay returned 202 with attempts reset to zero, and it tried again.
+
+Phase 7 (metrics and logs) is partly live, ahead of its place in the plan: kube-prometheus-stack,
+Loki and Alloy were installed with Helm into namespace `monitoring` on 3 Nov and are running.
+Logs from namespace `relay` are centralised and searchable in Grafana, the worker's included.
+Still missing: application metrics (no `/metrics` endpoint), a published address (Grafana is
+ClusterIP, SSH tunnel only), and the Helm values in git, which today is the only part of the
+system this repository cannot rebuild.
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
