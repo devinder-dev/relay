@@ -35,6 +35,7 @@ function Screen({ id }: { id: string | undefined }) {
   const [delivery, setDelivery] = useState<Detail | null>(null)
   const [failure, setFailure] = useState<ApiFailure | null>(null)
   const [replayFailure, setReplayFailure] = useState<string | null>(null)
+  const [replaying, setReplaying] = useState(false)
 
   // First load. `ignore` stops a late answer landing on a screen that has moved on.
   useEffect(() => {
@@ -92,6 +93,7 @@ function Screen({ id }: { id: string | undefined }) {
   // the short version and lose the payload this screen shows.
   async function replay() {
     setReplayFailure(null)
+    setReplaying(true)
     try {
       const replayed = await replayDelivery(delivery!.id)
       setDelivery({
@@ -105,6 +107,8 @@ function Screen({ id }: { id: string | undefined }) {
       // The three refusals the contract allows here (already delivered, endpoint deleted,
       // being sent right now) all arrive with a message written for a person.
       setReplayFailure((error as ApiFailure).message)
+    } finally {
+      setReplaying(false)
     }
   }
 
@@ -126,11 +130,15 @@ function Screen({ id }: { id: string | undefined }) {
             Its endpoint was deleted, so this cannot be replayed.
           </p>
         ) : (
+          // Disabled while the request is in flight. Two clicks used to send two replays:
+          // the second reset the delivery again and threw away the attempt the first had just
+          // started, so the history gained a row that belonged to no visible cycle.
           <button
             onClick={replay}
-            className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            disabled={replaying}
+            className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            Replay
+            {replaying ? 'Replaying…' : 'Replay'}
           </button>
         )}
       </div>

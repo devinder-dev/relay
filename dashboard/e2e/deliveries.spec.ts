@@ -138,3 +138,25 @@ test.describe('a missing delivery', () => {
     await expect(page.getByTestId('status')).toBeHidden()
   })
 })
+
+// Found by using it: two clicks sent two replays. The second reset the delivery again and threw
+// away the attempt the first had just started, so the attempt history gained a row belonging to
+// no visible cycle. The button has to refuse the second click while the first is in flight.
+test('Replay refuses a second click while the first is still going', async ({ page }) => {
+  // Hold the replay open for a second so the in-flight window is observable. Playwright routes
+  // are last-registered-first, and fallback() hands it on to the stand-in API underneath.
+  await page.route('**/v1/deliveries/*/replay', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await route.fallback()
+  })
+
+  await openRow(page, 'payment.failed')
+  await page.getByRole('button', { name: 'Replay' }).click()
+
+  // Same button, now disabled and saying so, which is what stops the second click.
+  await expect(page.getByRole('button', { name: /Replaying/ })).toBeDisabled()
+
+  // And it comes back once the answer arrives, because a pending delivery may be replayed again.
+  await expect(page.getByTestId('status')).toHaveText('pending')
+  await expect(page.getByRole('button', { name: 'Replay' })).toBeEnabled()
+})
