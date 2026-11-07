@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import StatusPill from '../components/StatusPill'
+import { listDeliveries, type ApiFailure } from '../api'
 import { clock } from '../format'
-import { listDeliveries } from '../mockStore'
-import type { DeliveryStatus } from '../types'
+import type { Delivery, DeliveryStatus } from '../types'
 
 type Filter = DeliveryStatus | 'all'
 
@@ -11,13 +11,38 @@ const filters: Filter[] = ['all', 'pending', 'delivered', 'dead']
 
 export default function DeliveryLog() {
   const [filter, setFilter] = useState<Filter>('all')
+  // null means "still asking". An empty array means the API answered with nothing.
+  const [rows, setRows] = useState<Delivery[] | null>(null)
+  const [failure, setFailure] = useState<ApiFailure | null>(null)
 
-  // Read once per mount, from the same store the detail screen writes to. React
-  // Router mounts this screen again every time you come back to it, so a replay
-  // made on the detail screen is here when you return.
-  const [page] = useState(listDeliveries)
+  // The API filters, not the browser: ?status= is part of the contract, and filtering a
+  // single page here would only ever filter the first 50 deliveries.
+  useEffect(() => {
+    // `ignore` drops the answer to a request we no longer want. Clicking two filters
+    // quickly starts two requests, and without this the slower one could land last and
+    // leave the table disagreeing with the selected filter.
+    let ignore = false
 
-  const rows = filter === 'all' ? page.data : page.data.filter((d) => d.status === filter)
+    listDeliveries(filter === 'all' ? {} : { status: filter })
+      .then((page) => {
+        if (!ignore) setRows(page.data)
+      })
+      .catch((error: unknown) => {
+        if (!ignore) setFailure(error as ApiFailure)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [filter])
+
+  // Clearing the table belongs to the click, not to the effect: doing it inside the effect
+  // would start a second render every time the filter changes, for no gain.
+  function pick(next: Filter) {
+    setRows(null)
+    setFailure(null)
+    setFilter(next)
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -27,7 +52,7 @@ export default function DeliveryLog() {
         {filters.map((f) => (
           <button
             key={f}
-            onClick={() => setFilter(f)}
+            onClick={() => pick(f)}
             className={[
               'mono rounded-full border px-3 py-1 text-xs transition-colors',
               f === filter
@@ -52,7 +77,7 @@ export default function DeliveryLog() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((d) => (
+            {(rows ?? []).map((d) => (
               <tr
                 key={d.id}
                 className="border-b border-[var(--line-soft)] last:border-0 hover:bg-[var(--paper)]"
@@ -83,7 +108,17 @@ export default function DeliveryLog() {
           </tbody>
         </table>
 
-        {rows.length === 0 && (
+        {/* Outside the table on purpose: a "loading" row inside tbody would be counted as
+            a delivery, by a reader and by a test. */}
+        {rows === null && !failure && (
+          <p className="px-4 py-8 text-center text-sm text-[var(--ink-dim)]">Loading…</p>
+        )}
+
+        {failure && (
+          <p className="px-4 py-8 text-center text-sm text-[var(--bad)]">{failure.message}</p>
+        )}
+
+        {rows?.length === 0 && (
           <p className="px-4 py-8 text-center text-sm text-[var(--ink-dim)]">
             No deliveries with status {filter}.
           </p>

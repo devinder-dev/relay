@@ -1,0 +1,132 @@
+# Applied by hand by an admin, never by the pipeline: the deployer cannot create
+# CronJobs, and backups must not change with app deploys.
+# Start one run on the server, never near 03:00 (Forbid does not cover manual Jobs):
+#   kubectl -n relay create job --from=cronjob/relay-backup relay-backup-manual-<n>
+# Read its recorded key, VersionId and SHA-256 on the server (also kept by Loki):
+#   kubectl -n relay logs job/relay-backup-manual-<n> -c upload
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: relay-backup
+  namespace: relay
+spec:
+  schedule: "0 3 * * *"
+  timeZone: Europe/Stockholm
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600  # skip a night if the controller is over an hour late
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900  # the whole Job, including retries
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: relay-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false  # neither container calls Kubernetes
+          # Use the same user and group as Postgres; both containers can read the shared dump.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          # The upload starts only after the dump succeeds, so a failed dump cannot be uploaded.
+          initContainers:
+            - name: dump
+              image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  pg_dump --format=custom --file=/work/relay.dump
+                  # A format check, not full integrity: the restore drill is the integrity proof.
+                  pg_restore --list /work/relay.dump > /dev/null
+              env:
+                - name: PGHOST
+                  value: postgres.relay.svc.cluster.local
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: relay
+                - name: PGDATABASE
+                  value: relay
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: relay-db
+                      key: password
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+                - name: tmp
+                  mountPath: /tmp
+          containers:
+            - name: upload
+              image: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # One clock read keeps the folder and filename on the same UTC date.
+                  t=$(date -u +%Y%m%dT%H%M%SZ)
+                  key="relay/${t%%T*}/relay-$t.dump"
+                  out=$(aws s3api put-object --bucket "$BUCKET" --key "$key" --body /work/relay.dump \
+                          --checksum-algorithm SHA256 --query '[VersionId, ChecksumSHA256]' --output text)
+                  echo "uploaded key=$key version_and_sha256=$out"
+              env:
+                - name: AWS_REGION
+                  value: eu-north-1
+                - name: BUCKET
+                  value: myrelay-tech-db-backups
+                # uid 999 has no writable home in this image; temporary files belong in /tmp.
+                - name: HOME
+                  value: /tmp
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: relay-backup-s3
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: relay-backup-s3
+                      key: AWS_SECRET_ACCESS_KEY
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: work
+                  mountPath: /work
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            # Temporary disk shared by both containers; 1Gi is a cap, not reserved space.
+            - name: work
+              emptyDir:
+                sizeLimit: 1Gi
+            - name: tmp
+              emptyDir: {}

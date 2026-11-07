@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import StatusPill from '../components/StatusPill'
+import { getDelivery, replayDelivery, type ApiFailure } from '../api'
 import { clock } from '../format'
-import { getDelivery, replayDelivery } from '../mockStore'
+import type { DeliveryDetail as Detail } from '../types'
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -31,24 +32,53 @@ export default function DeliveryDetail() {
 }
 
 function Screen({ id }: { id: string | undefined }) {
-  const [delivery, setDelivery] = useState(() => getDelivery(id))
+  const [delivery, setDelivery] = useState<Detail | null>(null)
+  const [failure, setFailure] = useState<ApiFailure | null>(null)
+  const [replayFailure, setReplayFailure] = useState<string | null>(null)
+  const [replaying, setReplaying] = useState(false)
 
-  // A pending delivery is waiting for its next try, so the screen reloads itself
-  // until it is not pending any more. Nothing is started for a delivery that is
-  // already delivered or dead, and the timer is cleared on the way out so it
-  // cannot outlive the screen.
+  // First load. `ignore` stops a late answer landing on a screen that has moved on.
   useEffect(() => {
-    if (delivery?.status !== 'pending') return
+    let ignore = false
+    if (!id) return
 
-    const timer = setInterval(() => setDelivery(getDelivery(id)), 2000)
+    getDelivery(id)
+      .then((found) => {
+        if (!ignore) setDelivery(found)
+      })
+      .catch((error: unknown) => {
+        if (!ignore) setFailure(error as ApiFailure)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [id])
+
+  // A pending delivery is waiting for its next try, so the screen reloads itself until it
+  // is not pending any more. Nothing is started for a delivery that is already delivered
+  // or dead, and the timer is cleared on the way out so it cannot outlive the screen.
+  useEffect(() => {
+    if (!id || delivery?.status !== 'pending') return
+
+    const timer = setInterval(() => {
+      // A failed reload is ignored on purpose: the screen keeps the last good answer and
+      // tries again in two seconds. Blanking a working screen because one request out of
+      // thirty hiccuped would be worse than showing data two seconds old.
+      void getDelivery(id)
+        .then(setDelivery)
+        .catch(() => {})
+    }, 2000)
 
     return () => clearInterval(timer)
   }, [delivery?.status, id])
 
-  if (!delivery) {
+  if (failure) {
+    // 404 is its own sentence: the contract answers 404 for a missing id, another owner's
+    // id and a malformed one alike, so this is all the screen can honestly say.
     return (
       <p className="text-sm text-[var(--ink-dim)]">
-        Delivery not found.{' '}
+        {failure.code === 'not_found' ? 'Delivery not found.' : failure.message}{' '}
         <Link to="/deliveries" className="text-[var(--accent)] hover:underline">
           Back to the log
         </Link>
@@ -56,11 +86,30 @@ function Screen({ id }: { id: string | undefined }) {
     )
   }
 
-  // The store does the work, so the log sees the replay too. ADR 0002: "Replay
-  // triggers one reload" - the answer is put on screen now, and the 2 s poll then
-  // reads the same store rather than handing back the old row.
-  function replay() {
-    setDelivery(replayDelivery(delivery!.id))
+  if (!delivery) return <p className="text-sm text-[var(--ink-dim)]">Loading…</p>
+
+  // 202 answers with a Delivery, not a DeliveryDetail, so only the four fields the
+  // contract changes are merged in. Spreading the whole answer would replace `event` with
+  // the short version and lose the payload this screen shows.
+  async function replay() {
+    setReplayFailure(null)
+    setReplaying(true)
+    try {
+      const replayed = await replayDelivery(delivery!.id)
+      setDelivery({
+        ...delivery!,
+        status: replayed.status,
+        attempts: replayed.attempts,
+        next_attempt_at: replayed.next_attempt_at,
+        last_error: replayed.last_error,
+      })
+    } catch (error: unknown) {
+      // The three refusals the contract allows here (already delivered, endpoint deleted,
+      // being sent right now) all arrive with a message written for a person.
+      setReplayFailure((error as ApiFailure).message)
+    } finally {
+      setReplaying(false)
+    }
   }
 
   return (
@@ -81,14 +130,20 @@ function Screen({ id }: { id: string | undefined }) {
             Its endpoint was deleted, so this cannot be replayed.
           </p>
         ) : (
+          // Disabled while the request is in flight. Two clicks used to send two replays:
+          // the second reset the delivery again and threw away the attempt the first had just
+          // started, so the history gained a row that belonged to no visible cycle.
           <button
             onClick={replay}
-            className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+            disabled={replaying}
+            className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            Replay
+            {replaying ? 'Replaying…' : 'Replay'}
           </button>
         )}
       </div>
+
+      {replayFailure && <p className="text-sm text-[var(--bad)]">{replayFailure}</p>}
 
       <dl className="grid grid-cols-2 gap-4 rounded-md border border-[var(--line-soft)] bg-[var(--card)] p-4 sm:grid-cols-4">
         <Row label="Attempts">

@@ -147,3 +147,10 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Keep local Terraform downloads, state, saved plans and crash reports out of git.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
