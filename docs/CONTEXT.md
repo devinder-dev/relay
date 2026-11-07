@@ -44,8 +44,8 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
 - Secrets live only in **GitHub Actions secrets** or **Kubernetes Secrets**. Never in git.
 - The kubeconfig is an admin password. It stays on the server in `~/.kube/config`.
 - Ask the other person before any destructive command on the VPS, the database or DNS.
-- Never expose to the internet: Postgres (5432), the Kubernetes API (6443), `/metrics`
-  (served on its own port 9090, which no Ingress points to).
+- Never expose to the internet: Postgres (5432), the Kubernetes API (6443), Grafana (SSH tunnel
+  only). `/metrics` is not built yet; if it is, it gets its own port that no Ingress points to.
 - Endpoint URLs from customers must not point to internal, private or our own VPS addresses
   (SSRF). Checked when an endpoint is created **and** before every delivery attempt; redirects
   are never followed. **Known gap, closed in Phase 4: DNS rebinding.** A name can resolve to a
