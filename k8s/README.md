@@ -81,18 +81,50 @@ these limits.
 `k8s/app/deployment.yaml` therefore has **no `replicas:` field**, and must not get one back:
 every deploy would overwrite whatever the autoscaler had decided.
 
-**Order:** apply this file *before* merging the PR that removes `replicas:` from
-`k8s/app/deployment.yaml`, and before the app manifests on a rebuild.
+**Why `replicas:` cannot simply be deleted.** `kubectl apply` removes a field that it applied
+last time and no longer sees, so the first deploy after that merge would set the count to **1**.
+Measured, not assumed: with the live Deployment running 2 pods,
+`apply --dry-run=server -o jsonpath={.spec.replicas}` on the field-less manifest answered `1`.
+The autoscaler would repair it, but not instantly - its 15 s sync, then a new pod starting and
+passing readiness, so 20-40 s on a single pod, and at the same moment a new image is rolling out.
+For a project graded on zero downtime, better that it never happens.
 
-`kubectl apply` deletes a field that it applied last time and is missing now, so the first deploy
-after that merge sets the count to **1**. Measured, not assumed: with the live Deployment running
-2 pods, `apply --dry-run=server -o jsonpath={.spec.replicas}` on the field-less manifest answered
-`1`. The autoscaler repairs it within about 15 s because `minReplicas` is 2 - but only if it is
-already there. Without it, the API stays on one pod and VG1 (two instances behind a load
-balancer) is quietly broken, with nothing failing to say so.
+**So remove the field from kubectl's memory first**, the migration path in Kubernetes' own HPA
+documentation. Run this on the server **immediately before merging**, with no other merge in
+between - every deploy re-applies `replicas: 2` and puts it back in the annotation:
 
-So, after the first deploy following that merge, check `kubectl -n relay get deploy relay-api`
-and expect 2.
+```sh
+kubectl -n relay get deploy relay-api \
+  -o jsonpath='{.metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration}' > ~/la-before.json
+jq 'del(.spec.replicas)' ~/la-before.json > ~/la-after.json
+diff <(jq -S . ~/la-before.json) <(jq -S . ~/la-after.json)   # must show only replicas
+kubectl -n relay apply set-last-applied -f ~/la-after.json    # changes only the annotation
+kubectl -n relay get deploy relay-api -o jsonpath='{.spec.replicas}'   # still 2
+```
+
+`jq` is on the server (1.8.1, checked). Without it, `kubectl -n relay apply edit-last-applied deployment/relay-api` does
+the same in an editor; run it on its own, since it asks questions. Neither file holds a secret:
+the Deployment's env uses `secretKeyRef`, so only the reference is in the annotation.
+
+Afterwards `apply --dry-run=server -o jsonpath={.spec.replicas}` answers **2**, and the count
+never drops.
+
+**The full order:**
+
+1. Apply `k8s/platform/api-hpa.yaml`. Nothing changes: it holds the count at 2.
+2. Load test and record the numbers, with no merges during the window.
+3. Clean the annotation, as above.
+4. Merge, and check `kubectl -n relay get deploy relay-api` never left 2.
+
+**Two things that put `replicas: 2` back.** A failed deploy of that PR makes `relay-deploy` roll
+back to the commit before it, which applies `replicas: 2` again and restores it in the annotation
+- as does any manual rollback to a commit from before the change. Repeat step 3 before deploying
+forward again. And while the autoscaler is applied but the PR is not yet merged, any *other*
+merge re-applies `replicas: 2` and resets the pod count, which is why the load test needs an
+agreed window.
+
+**On a rebuild**, apply the autoscaler before the app manifests: a Deployment created with
+neither a `replicas:` field nor an autoscaler starts with one pod.
 
 **Checking it:** `kubectl -n relay get hpa` shows the current and target CPU and the pod count.
 It needs metrics-server, which k3s runs by default; `kubectl -n relay top pods` proves it is

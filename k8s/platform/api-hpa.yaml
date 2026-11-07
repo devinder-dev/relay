@@ -6,13 +6,10 @@
 # merged pull request can never quietly widen or remove these limits. Same reasoning as the
 # worker's NetworkPolicy.
 #
-# Order matters, and more than it first looks. Apply this BEFORE merging the change that removes
-# `replicas:` from k8s/app/deployment.yaml. `kubectl apply` deletes a field it applied last time
-# and no longer sees, so that first deploy sets the count to 1 - checked with
-# `apply --dry-run=server -o jsonpath={.spec.replicas}`, which answered 1 while the live
-# Deployment was running 2. This autoscaler is what repairs it, within about 15 s, because
-# minReplicas is 2. Without it first, the API would sit on ONE pod and VG1 (two instances
-# behind a load balancer) would be quietly broken.
+# Order matters. Apply this BEFORE merging the change that removes `replicas:` from
+# k8s/app/deployment.yaml, and before cleaning that field out of kubectl's last-applied
+# annotation. Both steps, and why the annotation has to be cleaned rather than letting the
+# autoscaler repair a drop to one pod, are in k8s/README.md, "The API's autoscaler".
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

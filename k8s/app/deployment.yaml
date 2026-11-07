@@ -15,11 +15,14 @@ spec:
   # the autoscaler had decided, snapping a busy API back to 2 pods mid-release.
   #
   # READ THIS BEFORE MERGING. `kubectl apply` deletes a field that it applied last time and is
-  # missing now, so the first deploy after this merge sets the count to 1 - measured with
+  # missing now, so the first deploy after this merge would set the count to 1 - measured with
   # `apply --dry-run=server -o jsonpath={.spec.replicas}`, which answered 1 while the live
-  # Deployment said 2. The autoscaler is what puts it back: it sees 1 < minReplicas and scales
-  # to 2 within about 15 s. So k8s/platform/api-hpa.yaml MUST be applied before this is merged,
-  # and the pod count checked straight after the first deploy.
+  # Deployment said 2. The autoscaler would repair it, but only after its 15 s sync plus a new
+  # pod becoming ready: 20-40 s on one pod, during a rollout.
+  #
+  # So the field is removed from kubectl's last-applied annotation first, on the server, right
+  # before merging - then there is nothing to delete and the count never drops. The exact
+  # commands and the order are in k8s/README.md, "The API's autoscaler".
   selector:
     matchLabels:
       app.kubernetes.io/name: relay-api   # manage the pods that carry this label...
