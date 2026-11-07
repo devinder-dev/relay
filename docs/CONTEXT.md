@@ -216,6 +216,14 @@ Still missing: application metrics (no `/metrics` endpoint), a published address
 ClusterIP, SSH tunnel only), and the Helm values in git, which today is the only part of the
 system this repository cannot rebuild.
 
+Phase 6 (backups) is done (7 Nov): the S3 bucket and an upload-only IAM user built with
+Terraform (#43), and a nightly `pg_dump` CronJob at 03:00 Europe/Stockholm (#46). The upload is a
+single `put-object`, never `aws s3 cp`, because the key may not do multipart. Proven by a timed
+drill: the recorded version downloaded by VersionId with its checksum checked, restored as `relay`
+in 1.46 s, every count and id identical to production, and a wrong-password run uploaded nothing.
+The drill also found that the restore pipeline must run in bash, not zsh, whose MULTIOS option
+would mix the CLI's JSON into the dump. Still missing: an alert when a night fails or is skipped.
+
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·
 7 metrics and logs (Abdikhani, in parallel) · 8 VG under load · 9 docs and defense · 10 submit.
