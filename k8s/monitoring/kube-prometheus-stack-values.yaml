@@ -1,0 +1,52 @@
+# Values for kube-prometheus-stack 92.17.1 (Prometheus, Grafana, kube-state-metrics,
+# node-exporter, the Prometheus operator). Read back from the live release with
+# `helm get values monitoring -n monitoring`, so this is exactly what is running.
+#
+# Applied by hand, never by the pipeline: this installs CRDs and cluster-wide roles into its
+# own namespace, and the deployer account is confined to `relay` with no CRD rights. Port
+# 6443 is closed as well, so Helm cannot reach the cluster from CI at all.
+#
+# TODO(Devinder): the reasoning behind each choice, for the defense -
+#   - why 7 days of metrics retention and 10Gi of storage
+#   - why Alertmanager is off (nobody to page?)
+#   - why kubeControllerManager, kubeEtcd, kubeProxy and kubeScheduler are off (k3s runs them
+#     inside one process, so their metrics endpoints do not exist separately?)
+
+alertmanager:
+  enabled: false
+grafana:
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    resources:
+      limits:
+        memory: 1536Mi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+          - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+          storageClassName: local-path
