@@ -1,0 +1,62 @@
+# Applied by hand for the timed drill only. This pod holds a copy of production data:
+# delete it as soon as the drill is done. No Service: only an admin uses its local socket.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: relay-restore-drill
+  namespace: relay
+  labels:
+    # Never postgres: the production Service would send traffic to this temporary database.
+    app.kubernetes.io/name: relay-restore-drill
+spec:
+  restartPolicy: Never
+  # The drill takes minutes. If it is abandoned (interrupted, a stream fails halfway, someone
+  # gets pulled away), Kubernetes stops the pod after 2 hours instead of keeping a copy of
+  # customer data running forever. Deleting it (runbook 6f, step 4) is still the normal end.
+  activeDeadlineSeconds: 7200
+  automountServiceAccountToken: false
+  enableServiceLinks: false  # avoid Kubernetes-made POSTGRES_* environment variables
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: postgres
+      image: postgres:18.6@sha256:979bccfde35445db618c65107d27d08c6c21339d8dc3ad4c830c6633947be0e4
+      # Trust is safe here only because TCP is disabled; access needs an admin's exec.
+      env:
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: trust
+      args: ["postgres", "-c", "listen_addresses="]
+      readinessProbe:
+        exec:
+          command: ["pg_isready", "-h", "/var/run/postgresql"]
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        # Postgres 18 puts PGDATA below this directory, as in production.
+        - name: data
+          mountPath: /var/lib/postgresql
+        - name: socket
+          mountPath: /var/run/postgresql
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: data
+      emptyDir: {}
+    - name: socket
+      emptyDir: {}
+    - name: tmp
+      emptyDir: {}

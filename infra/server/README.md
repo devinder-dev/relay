@@ -75,9 +75,10 @@ each step only after the previous one worked:
 Check a login **from another pod**, never from inside `postgres-0`: the image trusts the local
 socket and `127.0.0.1` without a password, so a login from inside proves nothing.
 
-Until the backups exist (Phase 6), **a lost server means lost data**. Retain protects against
-`kubectl` mistakes (a deleted claim or namespace), not against losing the disk. Then: restore
-the newest dump from S3.
+The backup CronJob and restore manifests are in `k8s/data/`; setup and recovery are below.
+Retain protects against `kubectl` mistakes (a deleted claim or namespace), not a lost disk.
+Off-server recovery depends on a successful S3 upload and a verified restore; use the recorded
+key and VersionId, never simply the newest object.
 
 k3s's own data (the cluster state) isn't backed up on purpose: everything in it is rebuilt
 from git and these scripts. Only the database holds data that can't be rebuilt.
@@ -139,6 +140,242 @@ empty volume, so start over (ask the other person first: this deletes the volume
 2. Delete the PVC and then its PV.
 3. Delete the PV's folder on the server (`sudo rm -rf <path from the PV>`).
 4. Fix the script, then repeat steps 3–4 of section 6.
+
+### 6d. Backups
+
+`k8s/data/backup-cronjob.yaml` runs at **03:00 Europe/Stockholm** every day. An admin applies
+it after the bucket and Secret exist. It dumps one consistent snapshot as `relay`, checks the
+archive format, then uploads to `myrelay-tech-db-backups` in `eu-north-1`. Normal writes can
+continue; a schema migration may wait for the dump. The format check is not full integrity:
+the restore drill below is the proof that the data can be used.
+
+The key can only upload under `relay/`: it cannot read, list or delete. A stolen key can upload
+junk (costing money) or overwrite an existing key. Versioning keeps the previous version for
+about 30 days after an overwrite, so we must notice within that window and recover by VersionId.
+Current dumps expire after about 30 days; noncurrent versions remain about 30 more days.
+
+**The upload must stay `aws s3api put-object`, never `aws s3 cp`.** `s3 cp` switches to a
+multipart upload above 8 MiB, and multipart needs rights this key deliberately lacks, so backups
+would work while the database is small and fail with `AccessDenied` the first night a dump
+passed 8 MiB. `put-object` sends the file in one request, up to 5 GB, whatever its size; past
+5 GB, the key's rights have to be redesigned, not just the command. Today's dump is about 17 KB.
+Large upload with the real key, 7 Nov 2026: one 10,485,760-byte file through the same pod spec
+and Secret went up in a single `put-object` with its VersionId and SHA-256 logged; the test
+object was then deleted, every version. A wrong database password, also tested that day, fails
+the dump (`password authentication failed`) and the upload container never starts.
+
+Dumps contain signing secrets, API-key hashes, payloads and receiver excerpts. The private bucket,
+SSE-S3 encryption and HTTPS protect storage and transport, not a compromised server or admin.
+Never paste dump contents or secret-bearing SQL output into shared logs or a PR.
+**A `.dump` file is as sensitive as the database itself:** the signing-secret column is not
+encrypted, because we protect the backups instead (`docs/CONTEXT.md`). Never park one in
+Downloads, a shared folder or a chat; the drill streams it, and its fallback deletes the file
+straight after.
+
+From the repo root on the laptop, apply only the CronJob (not the drill Pod):
+
+```bash
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/data/backup-cronjob.yaml
+```
+
+On the server, choose a fresh number for `<n>`. Never start a manual Job near 03:00:
+`Forbid` prevents overlapping scheduled Jobs, but does not cover manual Jobs.
+
+```bash
+kubectl -n relay create job --from=cronjob/relay-backup relay-backup-manual-<n>
+kubectl -n relay get cronjob,jobs
+kubectl -n relay logs job/relay-backup-manual-<n> -c upload
+```
+
+Expect `uploaded key=... version_and_sha256=...`: the last two fields are VersionId and SHA-256.
+Keep that record for the restore (Loki keeps the line too). A missing success line is not a
+successful backup. `kubectl get cronjob` only shows `LAST SCHEDULE` (when a run started); the
+last success is `kubectl -n relay get cronjob relay-backup -o jsonpath='{.status.lastSuccessfulTime}'`.
+Check that, and the Job's completion. A controller more than an hour late skips that night;
+a Job has 900 seconds including retries, with at most two retries.
+
+The recovery point is **nominally daily**: the real age is the time since the last successful
+dump. A failed night makes it older. **Nothing alerts yet: someone checks by hand**, including
+the Sunday 03:00 run. These manifests and instructions alone are not evidence of a live backup.
+
+### 6e. The backup key
+
+An admin runs this once on the laptop. Values travel through stdin, never command arguments,
+shell history or a local file. Do not use `--debug`, `set -x`, or `-o yaml` on the Secret.
+IAM is global; S3 commands below name `eu-north-1` explicitly.
+
+```bash
+(
+  set -euo pipefail
+  aws iam create-access-key --user-name relay-backup --output json --no-cli-pager |
+    jq -er '.AccessKey |
+      select((.AccessKeyId | length) > 0 and (.SecretAccessKey | length) > 0) |
+      "AWS_ACCESS_KEY_ID=\(.AccessKeyId)\nAWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)"' |
+    ssh -T relay 'kubectl --kubeconfig "$HOME/.kube/config" -n relay create secret generic relay-backup-s3 --from-env-file=/dev/stdin'
+)
+```
+
+If any part fails, a key may exist without a usable Secret. Run
+`aws iam list-access-keys --user-name relay-backup`, identify the newly orphaned key (do not
+delete the working one), then
+`aws iam delete-access-key --user-name relay-backup --access-key-id <orphan-id>` and retry.
+The secret half cannot be fetched again. On the server,
+`kubectl -n relay describe secret relay-backup-s3` must list exactly `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`; this checks the names, not the connection. A successful backup tests it.
+
+To rotate: keep the old key working, create a second key, replace the Secret, run one manual
+backup and verify its upload, then delete the old key. For replacement, use the same pipeline
+above but replace its final SSH command with this one (the values still travel only over stdin):
+
+```bash
+ssh -T relay 'set -eu; kubectl --kubeconfig "$HOME/.kube/config" -n relay delete secret relay-backup-s3; kubectl --kubeconfig "$HOME/.kube/config" -n relay create secret generic relay-backup-s3 --from-env-file=/dev/stdin'
+```
+
+Rotate away from scheduled or running Jobs: existing pods keep the old environment. If Secret
+creation fails after deletion, keep the old key, recover the orphan as above and recreate the
+Secret before the next backup. Never delete the old key until the replacement's backup succeeds.
+
+### 6f. Restore drill (timed)
+
+This is a temporary copy of production data. Delete it as soon as the drill is done, including
+when a check fails. As a safety net, the Pod stops itself after 2 hours
+(`activeDeadlineSeconds`), so plan the drill to finish well inside that. Use admin AWS credentials on the laptop: the backup key cannot download.
+Commands below run on the laptop unless marked otherwise.
+
+1. Apply the Pod, wait for readiness, then create the role and empty database. Preparation is
+   outside the timed restore. The Pod has no TCP listener and no Service.
+
+   ```bash
+   ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/data/restore-drill.yaml
+   ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay wait --for=condition=Ready pod/relay-restore-drill --timeout=120s'
+   ssh -T relay 'kubectl --kubeconfig ~/.kube/config -n relay exec -i relay-restore-drill -- psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres' <<'SQL'
+   CREATE ROLE relay LOGIN NOSUPERUSER;
+   CREATE DATABASE relay OWNER relay;
+   SQL
+   ```
+
+2. Read the chosen successful Job's upload log (section 6d), not simply the newest S3 object.
+   Set `KEY` and `VER` below to its recorded key and VersionId. The checksum is also in that
+   log. Restore that version **as `relay`**, never as the superuser.
+
+   **Run it in bash, not zsh** (zsh is the macOS default: type `bash` first). zsh's `MULTIOS`
+   option sends a redirected output to the pipe *as well*, so the CLI's JSON answer would be
+   mixed into the dump and `pg_restore` would fail. Found and tested on 7 Nov: in zsh,
+   `{ echo json; echo BODY >&3; } 3>&1 1>&2 | cat` passes both lines into the pipe; bash only `BODY`.
+
+   ```bash
+   B=myrelay-tech-db-backups
+   KEY='<recorded key>'
+   VER='<recorded VersionId>'
+   set -o pipefail
+   time ( aws s3api get-object --region eu-north-1 --bucket "$B" --key "$KEY" --version-id "$VER" \
+            --checksum-mode ENABLED /dev/fd/3 3>&1 1>&2 \
+          | ssh -T relay 'kubectl --kubeconfig "$HOME/.kube/config" -n relay exec -i relay-restore-drill -- \
+              pg_restore --no-owner --no-acl --exit-on-error -U relay -d relay' )
+   ```
+
+   File descriptor 3 sends the dump body into the pipe; the CLI's JSON answer goes to the
+   terminal. `pipefail` makes a download failure fail the whole pipeline too. Record success
+   only if the command exits zero. If streaming fails, delete and recreate the drill Pod
+   before retrying: a partial restore is not an empty database. Fallback: download to a
+   `mktemp` file on the laptop (mode 600), restore from it, then delete it immediately;
+   include download and restore in the timing.
+
+3. Check **as `relay`**. On the server, run the following for `relay-restore-drill`, then again
+   with `postgres-0` for comparison. Only counts and ids are printed, never secrets. Table ids
+   below come from the current migrations; choose one known production delivery id and replace
+   the placeholder before running. Schema migration versions and table names must match.
+   Counts may differ because production has grown since the snapshot; investigate missing
+   relationships or an expected delivery absent from the snapshot.
+
+   ```bash
+   kubectl -n relay exec -i relay-restore-drill -- psql -X -v ON_ERROR_STOP=1 -U relay -d relay <<'SQL'
+   SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;
+   SELECT version FROM schema_migrations ORDER BY version;
+   SELECT 'owners' AS table_name, count(*) FROM owners
+   UNION ALL SELECT 'api_keys', count(*) FROM api_keys
+   UNION ALL SELECT 'endpoints', count(*) FROM endpoints
+   UNION ALL SELECT 'events', count(*) FROM events
+   UNION ALL SELECT 'deliveries', count(*) FROM deliveries
+   UNION ALL SELECT 'attempts', count(*) FROM attempts;
+   SELECT d.id, e.id AS event_id, ep.id AS endpoint_id
+   FROM deliveries d JOIN events e ON e.id = d.event_id
+   JOIN endpoints ep ON ep.id = d.endpoint_id LIMIT 5;
+   SELECT id FROM deliveries WHERE id = '<known delivery UUID>';
+   SQL
+   ```
+
+4. On the server, delete the copy and check that it is gone:
+
+   ```bash
+   kubectl -n relay delete pod relay-restore-drill
+   kubectl -n relay get pod relay-restore-drill
+   ```
+
+   Expect `NotFound`. Measured time covers download plus restore only, not rebuilding a lost
+   server, k3s, Secrets or DNS.
+
+Measured, 7 Nov 2026: the 14:46 UTC dump (`relay-backup-manual-1`, 17,851 bytes) restored as
+`relay` in **1.46 s**, download plus restore, `pg_restore` exit 0. The SHA-256 S3 returned matched
+the Job's log line. Every check matched production exactly: the same 7 tables, migration
+`20261031140445`, the same row counts in all six tables, the joins, 58 constraints, 16 indexes
+and the same delivery ids. The time grows with the database; today's is tiny.
+
+### 6g. Restore into production (not rehearsed)
+
+**Ask the other person first.** This deletes production's database. These steps are written,
+not rehearsed; stop on any failure, leaving traffic stopped until the checks pass.
+
+1. Freeze merges and wait for any active deploy to finish, so no deploy scales the app back up.
+   Record the chosen backup's key and VersionId from a successful Job log.
+2. On the server, suspend scheduled backups and wait for any already running backup Job to
+   finish (suspending does not stop existing Jobs):
+
+   ```bash
+   kubectl -n relay patch cronjob relay-backup -p '{"spec":{"suspend":true}}'
+   kubectl -n relay get jobs
+   ```
+
+3. Scale API and worker to zero and wait until their pods are gone. Both currently use fixed
+   replicas. If autoscaling is added later, review this stop procedure before using it.
+
+   ```bash
+   kubectl -n relay scale deployment/relay-api deployment/relay-worker --replicas=0
+   kubectl -n relay get pods
+   ```
+
+4. In `postgres-0`, recreate an **empty** database owned by `relay`. The role already exists;
+   its password is not part of the dump. A lost server needs sections 1–6 first to rebuild
+   Postgres and its Secrets.
+
+   ```bash
+   kubectl -n relay exec -i postgres-0 -- psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
+   DROP DATABASE relay;
+   CREATE DATABASE relay OWNER relay;
+   SQL
+   ```
+
+5. From the laptop, **in bash** (see 6f), run 6f's streaming command with the chosen `KEY` and
+   `VER`, changing only `relay-restore-drill` to `postgres-0`. Keep `set -o pipefail`, `--exit-on-error`,
+   `--no-owner --no-acl` and `-U relay`. Never restore a dump as the superuser. If it fails,
+   leave the app stopped and recreate the empty database before retrying.
+6. Run 6f's checks as `relay` against `postgres-0`, comparing with the chosen backup's drill
+   results and recorded migration versions. Do not resume traffic until the checks pass.
+7. Scale back up, wait for both deployments, unsuspend backups, then lift the
+   merge freeze:
+
+   ```bash
+   kubectl -n relay scale deployment/relay-api deployment/relay-worker --replicas=2
+   kubectl -n relay rollout status deployment/relay-api
+   kubectl -n relay rollout status deployment/relay-worker
+   kubectl -n relay patch cronjob relay-backup -p '{"spec":{"suspend":false}}'
+   ```
+
+   A recent missed schedule may run when unsuspended; don't start a manual backup alongside it.
+   After a lost-server recovery, rotate the backup key using 6e.
+
+Pending deliveries in the snapshot may be sent again even if they were delivered afterwards.
+That is **at-least-once delivery**: receivers must drop duplicates by `webhook-id`.
 
 ## Reboots
 
