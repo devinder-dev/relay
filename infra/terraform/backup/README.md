@@ -21,15 +21,47 @@ terraform plan
 terraform apply
 ```
 
-Terraform is pinned to `1.17.1`, and the AWS provider to `6.70.0`. After `init`,
-commit `.terraform.lock.hcl` through review: it records the provider checksums.
-It is deliberately not ignored.
+Terraform is pinned to `1.17.0` exactly (a release at least two weeks old), and the AWS
+provider to `6.70.0`. A different Terraform refuses to run, on purpose. Install that exact
+version from `releases.hashicorp.com` and check it against the release's `SHA256SUMS`.
+`.terraform.lock.hcl` is committed: it records the provider's checksums for macOS (arm64,
+amd64) and Linux amd64, so `init` gives the same provider on any of our machines.
 
-State is local and gitignored. It records resource identities, holds no secrets in
-this configuration, and must be kept safely. If lost, use `terraform import` for
-the existing resources before the next `apply`; do not try to recreate them.
-The access key is made outside Terraform. See [runbook section 6](../../server/README.md#6-data-postgres-step-23-backups-in-phase-6)
-for the data runbook; backup key creation and rotation instructions are pending step 6-B.
+The access key is made outside Terraform, so no secret is in the state. See
+[runbook section 6](../../server/README.md#6-data-postgres-step-23-backups-in-phase-6).
+
+## Who holds the state
+
+State is local and gitignored: `infra/terraform/backup/terraform.tfstate` on Devinder's
+laptop, the only machine with AWS admin access to this account. It holds resource
+identities (names, ARNs), no secrets. It isn't copied anywhere: losing it costs minutes,
+not data, because everything it describes can be read back from AWS.
+
+If the state is lost (or someone else takes over with their own admin access), rebuild it
+before any `apply`, from this folder. Never let `apply` try to create these again:
+
+```sh
+terraform init
+terraform import aws_s3_bucket.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_public_access_block.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_ownership_controls.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_versioning.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_server_side_encryption_configuration.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_lifecycle_configuration.backup myrelay-tech-db-backups
+terraform import aws_s3_bucket_policy.backup myrelay-tech-db-backups
+terraform import aws_iam_user.backup relay-backup
+terraform import aws_iam_user_policy.backup relay-backup:relay-backup-upload
+terraform plan   # must say: No changes
+```
+
+## What the lifecycle rule doesn't cover
+
+It only applies under `relay/`, where the backup Job writes. Anything else in the bucket
+never expires. Only an admin can write outside `relay/`, so delete any test object you put
+there by hand, every version of it (`list-object-versions`, then `delete-object
+--version-id`). Delete markers left by expiration are removed by S3 itself: with
+`Expiration` in `days`, S3 cleans up expired object delete markers automatically
+([AWS lifecycle examples](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-configuration-examples.html#lifecycle-config-conceptual-ex7)).
 
 ## Checks after apply
 
