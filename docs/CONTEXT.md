@@ -215,11 +215,12 @@ Logs from namespace `relay`, the worker's included, are centralised in Loki and 
 Grafana. The chart provisions only a Prometheus datasource, so a Loki one was added on 8 Nov as a
 labelled ConfigMap that Grafana's sidecar picks up and reloads - no chart upgrade, which also
 avoids rolling Prometheus to add one datasource.
-Still missing: application metrics (no `/metrics` endpoint), a published address (Grafana is
-ClusterIP, SSH tunnel only), and the Helm values in git, which today is the only part of the
-system this repository cannot rebuild.
+The Helm values, and the reason behind each setting, are recorded in `k8s/monitoring/` (#44).
+Still missing: application metrics (no `/metrics` endpoint) and a published address (Grafana
+is ClusterIP, SSH tunnel only).
 
-Phase 6 (backups) is built and restore-tested (7 Nov); its first scheduled run is 8 Nov at 03:00.
+Phase 6 (backups) is done: restore-tested on 7 Nov, and the schedule ran on its own on 8 Nov at
+03:00 and succeeded.
 It consists of the S3 bucket and an upload-only IAM user built with
 Terraform (#43), and a nightly `pg_dump` CronJob at 03:00 Europe/Stockholm (#46). The upload is a
 single `put-object`, never `aws s3 cp`, because the key may not do multipart. Proven by a timed
@@ -227,6 +228,10 @@ drill: the recorded version downloaded by VersionId with its checksum checked, r
 in 1.46 s, every count and id identical to production, and a wrong-password run uploaded nothing.
 The drill also found that the restore pipeline must run in bash, not zsh, whose MULTIOS option
 would mix the CLI's JSON into the dump. Still missing: an alert when a night fails or is skipped.
+
+Phase 8 (VG under load) is done (7 Nov): an autoscaler holds the API between 2 and 4 pods
+(#45). Under 80 k6 users it went from 2 to 4 pods in 66 s and back to 2 in 6 m 07 s, with
+437,991 requests and 0 failed (#47).
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·

@@ -338,8 +338,10 @@ not rehearsed; stop on any failure, leaving traffic stopped until the checks pas
    kubectl -n relay get jobs
    ```
 
-3. Scale API and worker to zero and wait until their pods are gone. Both currently use fixed
-   replicas. If autoscaling is added later, review this stop procedure before using it.
+3. Scale API and worker to zero and wait until their pods are gone. The worker has a fixed
+   replica count; the API has an autoscaler (2 to 4 pods). Scaling the API to 0 does not fight
+   it: the autoscaler pauses itself (`ScalingActive=False`) while its target is at 0, and
+   step 7's `--replicas=2` wakes it again.
 
    ```bash
    kubectl -n relay scale deployment/relay-api deployment/relay-worker --replicas=0
