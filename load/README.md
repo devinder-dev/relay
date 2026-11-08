@@ -23,12 +23,14 @@ docker run --rm -i grafana/k6:1.8.2 run - < load/relay.js
 That runs the default scenario, `health`: 20 virtual users against `GET /health/live` for two
 minutes. No key, no database, nothing written.
 
-The reads scenario needs an API key. Export it first so it never appears in the command line or
-in the shell's history - `-e RELAY_KEY` with no value passes it from the environment:
+The reads scenario needs an API key. `read -rs` takes it without showing it or writing it to the
+history file, and `-e RELAY_KEY` with no value passes it from the environment, so the key reaches
+neither the command line nor the shell's history (bash and zsh):
 
 ```sh
-export RELAY_KEY='relay_live_…'
+read -rs RELAY_KEY && export RELAY_KEY   # paste the key, press Enter: nothing is shown or saved
 docker run --rm -i -e SCENARIO=read -e RELAY_KEY grafana/k6:1.8.2 run - < load/relay.js
+unset RELAY_KEY
 ```
 
 | Variable | Default | What it does |
@@ -55,13 +57,14 @@ laptop, so it guards against regression rather than proving absolute speed.
 
 `read` has **not been measured**: it needs an API key, so it has no baseline yet. Its 300 ms is
 loose on purpose, because the database holds a handful of rows today and any number measured now
-would say little about a loaded one. It is not a claim that a page takes 300 ms; it is a claim
-that a page should never take seconds, which is what a missing index on a grown `deliveries`
-table would look like. Take a baseline and tighten it:
+would say little about a loaded one. What it checks is **95% of pages within 300 ms**, so the
+slowest 5% are allowed through; a missing index on a grown `deliveries` table would break it.
+Take a baseline and tighten it:
 
 ```sh
-export RELAY_KEY='relay_live_…'
+read -rs RELAY_KEY && export RELAY_KEY
 docker run --rm -i -e SCENARIO=read -e DURATION=30s -e RELAY_KEY grafana/k6:1.8.2 run - < load/relay.js
+unset RELAY_KEY
 ```
 
 ## What it does not do
@@ -98,8 +101,10 @@ explaining its own decisions - and report the measured time to scale rather than
 below the 70m the autoscaler needs. The test is latency-bound (20 users x 52 ms round trip is
 about 380 requests a second), so each request costs the API almost nothing.
 
-For the autoscaler to settle at four pods, each of the four has to exceed 70m, so over 280m in
-total against the ~102m that 20 users produced - roughly 2.75x. Use about 80:
+The autoscaler wants `ceil(total CPU / 70m)` pods and ignores changes inside 10%, so two pods go
+to four once the total passes about 231m - roughly 2x the ~102m that 20 users produced, which is
+about 40 users in theory. Measured, **80 users moved it from 2 pods to 4 in 66 s**, while 20 users
+peak at about 51m per pod and move nothing. Use 80, which keeps that margin:
 
 ```sh
 docker run --rm -i -e VUS=80 -e DURATION=5m grafana/k6:1.8.2 run - < load/relay.js

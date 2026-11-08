@@ -24,8 +24,9 @@ const SCENARIO = __ENV.SCENARIO || 'health'
 // The defaults are the shape to quote as "the load test". VUS and DURATION override them
 // without editing this file, which is what the autoscaler run needs: 20 users is latency-bound
 // at about 380 requests a second and only reaches ~51m of CPU per pod, below the autoscaler's
-// 70m target, so it would show no scaling at all. Measured 7 Nov: 45,732 requests, 0 failed,
-// p(95) 63 ms, peak 51m per pod. Reaching four pods needs roughly 80 users.
+// 70m target, so it moves nothing. Measured 7 Nov: 20 users gave 45,732 requests, 0 failed,
+// p(95) 63 ms and a peak of 51m per pod with no scaling at all; 80 users moved the API from
+// 2 pods to 4 in 66 s.
 const defaults = {
   health: { vus: 20, duration: '2m' },
   read: { vus: 5, duration: '1m' },
@@ -42,27 +43,7 @@ const shapes = Object.fromEntries(
   ]),
 )
 
-// ---------------------------------------------------------------------------------------------
-// YOUR PART. What counts as fast enough and reliable enough for Relay?
-//
-// k6 fails the run (exit code 99) if a threshold is not met, which is what makes this a test
-// rather than a report. Each entry is `'metric': ['expression', ...]`. The ones worth using:
-//
-//   http_req_failed      a rate, 0 to 1. Requests that did not get a 2xx or 3xx.
-//                        e.g. 'rate<0.01'  = under 1% failed
-//   http_req_duration    a duration in ms, with p(95), p(99), avg, max.
-//                        e.g. 'p(95)<500'  = 95% of requests answered inside 500 ms
-//   checks               a rate. The check() calls below.
-//                        e.g. 'rate>0.99'
-//
-// Two things to think about rather than copying a number from a blog post:
-//
-//   - `health` answers from memory with no database, over the public internet from one laptop.
-//     Most of its time is network, not Relay. A tight p(95) here measures the café wifi.
-//   - `read` joins three tables and is paged. It should be slower, and its ceiling says what a
-//     dashboard user would put up with - which is a product decision, not a technical one.
-//
-// Be ready to defend the numbers: an examiner can reasonably ask "why 500 and not 200?"
+// Thresholds: why each number, so the run fails rather than just reports.
 const thresholds = {
   health: {
     // Zero failures in 53,224 requests across two runs on 7 Nov. At 1% this would allow 532
@@ -85,14 +66,13 @@ const thresholds = {
     // so the failure budget stays as strict as the health one.
     http_req_failed: ['rate<0.001'],
     // Deliberately loose at 300 ms, for a reason worth saying out loud: the database holds a
-    // handful of rows today, so any number measured now says little about a loaded one. This
-    // is not "a page should take 300 ms" - it is "a page should never take seconds", which is
-    // what a missing index on a grown `deliveries` table would look like.
+    // handful of rows today, so any number measured now says little about a loaded one. What it
+    // checks is "95% of pages within 300 ms" - the slowest 5% are allowed through - which a
+    // missing index on a grown `deliveries` table would break.
     http_req_duration: ['p(95)<300'],
     checks: ['rate>0.999'],
   },
 }
-// ---------------------------------------------------------------------------------------------
 
 if (!shapes[SCENARIO]) {
   throw new Error(`SCENARIO must be one of: ${Object.keys(shapes).join(', ')}`)
@@ -116,7 +96,9 @@ export function health() {
   const res = http.get(`${BASE}/health/live`, { tags: { name: 'health/live' } })
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'says ok': (r) => r.json('status') === 'ok',
+    // r.json() throws on a non-JSON answer (an HTML error page from Traefik), which would end
+    // the iteration instead of failing the check.
+    'says ok': (r) => { try { return r.json('status') === 'ok' } catch (e) { return false } },
   })
 }
 
@@ -127,7 +109,8 @@ export function read() {
   })
   check(res, {
     'status is 200': (r) => r.status === 200,
-    // A 200 with a body that is not a page would still count as success without this.
-    'answers a page': (r) => Array.isArray(r.json('data')),
+    // A 200 with a body that is not a page would still count as success without this, and the
+    // try/catch stops a non-JSON answer from throwing out of the check.
+    'answers a page': (r) => { try { return Array.isArray(r.json('data')) } catch (e) { return false } },
   })
 }
