@@ -1,0 +1,36 @@
+# Loki as a Grafana datasource, so logs can be searched in Grafana rather than only through Loki's
+# own HTTP API. Applied by hand with kubectl:
+#
+#   ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-loki-datasource.yaml
+#
+# Why a ConfigMap rather than `grafana.additionalDataSources` in the chart's values: Grafana's
+# datasource sidecar runs with METHOD=WATCH, LABEL=grafana_datasource, LABEL_VALUE=1 and
+# REQ_METHOD=POST, so it notices a labelled ConfigMap and asks Grafana to reload - no pod restart,
+# and no `helm upgrade`. Putting it in the values instead would mean re-running the whole
+# kube-prometheus-stack upgrade to add one datasource, which can roll Prometheus and the operator
+# as well. One datasource is not worth that risk, and on 8 Nov 2026 it was not even possible:
+# GitHub's release downloads were answering 504, so the chart could not be fetched at all.
+#
+# Keep this as the only place the Loki datasource is declared. Adding it to the chart values too
+# would give Grafana two datasources with the same uid.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-loki-datasource
+  namespace: monitoring
+  labels:
+    # The label the sidecar watches for. Without it this ConfigMap is ignored.
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        # The same address Alloy pushes to, so if logs arrive, this URL reaches them.
+        url: http://loki-gateway.monitoring.svc.cluster.local
+        jsonData:
+          # Logs are kept 72 hours (loki-values.yaml), so asking for more is pointless.
+          maxLines: 1000

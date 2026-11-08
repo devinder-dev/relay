@@ -34,8 +34,15 @@ the repository instead of from somebody's shell history, which is what
 [`../README.md`](../README.md) already requires: *"Everything applied by hand is committed in the
 same PR."*
 
-The Loki datasource below is the exception: it is a change, not a record, so the `monitoring`
-release has to be upgraded once after this merges.
+`grafana-loki-datasource.yaml` is the exception: it is a change rather than a record. It is a
+plain ConfigMap applied with `kubectl`, not part of the Helm release, because Grafana's datasource
+sidecar watches for a labelled ConfigMap and reloads on its own - so adding a datasource needs no
+chart upgrade and cannot roll Prometheus or the operator. **Applied on 8 Nov 2026**; Grafana
+answered the sidecar's reload with `200 OK {"message":"Datasources config reloaded"}`.
+
+```sh
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-loki-datasource.yaml
+```
 
 ## Its own namespace, and what it costs the node
 
@@ -105,12 +112,11 @@ no credential in this folder and nothing to redact. Read it on the server if nee
 - **Logs: collected.** Alloy collects every pod in namespace `relay` and pushes to Loki. Checked
   by querying Loki's own HTTP API and finding live lines from both API pods and the worker's
   retry-to-dead cycle.
-- **Searching them in Grafana needed fixing.** The chart provisions only Prometheus and
-  Alertmanager as datasources; there was no Loki one in git, so a rebuild from this folder would
-  have produced a Grafana that cannot search logs at all. `grafana.additionalDataSources` now
-  declares it. **This is the one thing in this folder that has to be applied** - re-run the
-  `monitoring` upgrade command above - because unlike the rest it changes the live release rather
-  than only recording it.
+- **Searching them in Grafana: working, after a fix.** The chart provisions only Prometheus and
+  Alertmanager as datasources, and no Loki one existed in git - so a rebuild from this folder would
+  have produced a Grafana that could not search logs at all.
+  [`grafana-loki-datasource.yaml`](grafana-loki-datasource.yaml) declares it, and was applied on
+  8 Nov. On a rebuild, apply it after the Helm releases.
 - **Infrastructure metrics: working.** Prometheus scrapes the nodes, the kubelet, CoreDNS, the
   API server and kube-state-metrics.
 - **Application metrics: none.** Relay exposes no `/metrics` endpoint and no ServiceMonitor
