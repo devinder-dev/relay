@@ -1,0 +1,65 @@
+# Values for alloy 1.15.0, read back with `helm get values alloy -n monitoring`.
+#
+# Alloy is the agent that reads pod logs and pushes them to Loki. The config below is the
+# only reason logs reach Grafana, and it collects namespace `relay` ONLY - so the API, the
+# worker and the demo receiver are covered, and nothing from kube-system or monitoring is.
+#
+# Why these choices:
+#
+# Only the `relay` namespace: that is our application, where everything we debug lives. kube-system
+# is noise for us, and collecting `monitoring` would have Loki ingesting its own logs. Less volume
+# keeps 72 hours inside the 5Gi volume, and it is the least data we need.
+#
+# No more labels than pod and container: fields like `level` or a delivery id are read at query
+# time with LogQL's `| json`. A label per delivery id would create a new stream for every value -
+# high cardinality, the classic way to make Loki slow.
+
+alloy:
+  configMap:
+    content: |
+      discovery.kubernetes "relay_pods" {
+        role = "pod"
+
+        namespaces {
+          names = ["relay"]
+        }
+      }
+
+      discovery.relabel "relay_logs" {
+        targets = discovery.kubernetes.relay_pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+      }
+
+      loki.source.kubernetes "relay" {
+        targets    = discovery.relabel.relay_logs.output
+        forward_to = [loki.write.local.receiver]
+      }
+
+      loki.write "local" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+  resources:
+    limits:
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+controller:
+  replicas: 1
+  type: deployment

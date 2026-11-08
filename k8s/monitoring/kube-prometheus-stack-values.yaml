@@ -1,0 +1,68 @@
+# Values for kube-prometheus-stack 92.17.1 (Prometheus, Grafana, kube-state-metrics,
+# node-exporter, the Prometheus operator). Read back from the live release with
+# `helm get values monitoring -n monitoring`, so this is exactly what is running.
+#
+# Applied by hand, never by the pipeline: this installs CRDs and cluster-wide roles into its
+# own namespace, and the deployer account is confined to `relay` with no CRD rights. Port
+# 6443 is closed as well, so Helm cannot reach the cluster from CI at all.
+#
+# Why these choices:
+#
+# 7 days and 10Gi: a week of history covers the exam period and any incident we would still be
+# looking into. One node produces few series, so 7 days fits well inside 10Gi - and 10Gi is a cap
+# on a 200 GB disk, not an estimate of what we need. Worth a later PR (a values change, so its own
+# `helm upgrade`): set `retentionSize` a little under 10Gi, so Prometheus drops old data before the
+# volume fills instead of failing when it does.
+#
+# Alertmanager off: there is no receiver - no email, Slack or pager - and nobody on call, so alerts
+# would go nowhere and still cost memory. We check by hand, the same honest line the backup runbook
+# uses.
+#
+# kubeControllerManager, kubeEtcd, kubeProxy and kubeScheduler off: k3s runs the controller
+# manager, the scheduler and the proxy inside the single `k3s server` process, so the chart's
+# separate scrape targets do not exist and would sit permanently down. A single-server k3s also
+# keeps cluster state in SQLite (`/var/lib/rancher/k3s/server/db/state.db`), not etcd, so there is
+# no etcd to scrape either.
+
+alertmanager:
+  enabled: false
+grafana:
+  # No Loki datasource here on purpose. It lives in grafana-loki-datasource.yaml, applied with
+  # kubectl, because Grafana's sidecar watches for a labelled ConfigMap and reloads on its own -
+  # adding it here would mean re-running the whole chart upgrade for one datasource, and would
+  # give Grafana two datasources with the same uid.
+  persistence:
+    enabled: true
+    size: 2Gi
+  resources:
+    limits:
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    resources:
+      limits:
+        memory: 1536Mi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+          - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+          storageClassName: local-path
