@@ -37,6 +37,26 @@ same PR."*
 The Loki datasource below is the exception: it is a change, not a record, so the `monitoring`
 release has to be upgraded once after this merges.
 
+## Its own namespace, and what it costs the node
+
+`monitoring`, not `relay`, because node-exporter needs host access (the node's filesystem and
+network namespace) and `relay` enforces Pod Security `restricted`, which refuses exactly that. So
+the stack could not run in `relay` even if we wanted it there.
+
+The memory limits add up to **about 3 GiB** of the node's 8 GB, which is worth knowing before
+giving anything else headroom:
+
+| | Limit |
+|---|---|
+| Prometheus | 1536Mi |
+| Loki | 768Mi |
+| Grafana | 512Mi |
+| Alloy | 256Mi |
+| **Total** | **3072Mi, exactly 3 GiB** |
+
+That is the figure behind the API autoscaler's ceiling of four pods: what limits it is the `100m`
+CPU request and the node's 4 vCPU, not memory, because this stack has already taken its share.
+
 ## Installing or upgrading
 
 The chart repositories are not configured on the server (`helm repo list` is empty), so add them
@@ -100,9 +120,10 @@ no credential in this folder and nothing to redact. Read it on the server if nee
 - **No backup.** Loki's and Prometheus's volumes are not backed up. Losing the node loses the
   history.
 
-## Open questions for review
+## Why each setting is what it is
 
-Each values file carries `TODO(Devinder)` lines asking for the reasoning behind the choices that
-were made at install time - retention periods, which exporters are switched off, why only the
-`relay` namespace is scraped. The settings are recorded exactly; the reasons are not, and both of
-us are examined on them.
+Every choice made at install time now carries its reasoning as a comment in the values file it
+belongs to, rather than in this README or in a pull request that will be closed: retention periods
+and the disabled exporters in `kube-prometheus-stack-values.yaml`, retention, caches and the lost-
+volume consequence in `loki-values.yaml`, and the namespace scope and label cardinality in
+`alloy-values.yaml`. Read those files to answer "why 7 days?" or "why only `relay`?".

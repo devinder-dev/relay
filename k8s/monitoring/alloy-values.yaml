@@ -4,9 +4,15 @@
 # only reason logs reach Grafana, and it collects namespace `relay` ONLY - so the API, the
 # worker and the demo receiver are covered, and nothing from kube-system or monitoring is.
 #
-# TODO(Devinder): for the defense -
-#   - why only the `relay` namespace (noise? volume? deliberate scope?)
-#   - whether we want the worker's own logs labelled any further than pod/container
+# Why these choices:
+#
+# Only the `relay` namespace: that is our application, where everything we debug lives. kube-system
+# is noise for us, and collecting `monitoring` would have Loki ingesting its own logs. Less volume
+# keeps 72 hours inside the 5Gi volume, and it is the least data we need.
+#
+# No more labels than pod and container: fields like `level` or a delivery id are read at query
+# time with LogQL's `| json`. A label per delivery id would create a new stream for every value -
+# high cardinality, the classic way to make Loki slow.
 
 alloy:
   configMap:

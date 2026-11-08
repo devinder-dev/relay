@@ -4,10 +4,21 @@
 # store and no second node to spread over, so the scalable modes would add parts without
 # adding safety.
 #
-# TODO(Devinder): for the defense -
-#   - why 72 hours of log retention
-#   - why the caches and the canary are disabled
-#   - what happens to logs if this pod's volume is lost (no backup today?)
+# Why these choices:
+#
+# 72 hours: logs are for debugging what just happened - the last deploy, a worker's retry cycle -
+# and three days covers a weekend. Keeping less also means keeping less customer data (request
+# paths with ids, delivery details), and it stays well inside the 5Gi volume.
+#
+# Caches and canary off: the chart's default chunks cache is a memcached with
+# `allocatedMemory: 8192`, i.e. 8 GB - the whole VPS. With one node and little log volume the
+# caches would cost memory for no speed-up. The canary writes and reads synthetic log lines to
+# measure Loki itself: useful in a large installation, noise here.
+#
+# If this volume is lost, the logs are gone. Loki and Prometheus both use the default `local-path`
+# StorageClass, which is deleted with its claim, unlike Postgres's `local-path-retain`, and neither
+# is backed up. That is deliberate: logs and metrics are operational history, while the database is
+# the data we have to keep.
 
 backend:
   replicas: 0
