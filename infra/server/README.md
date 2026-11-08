@@ -124,7 +124,9 @@ stored one to the new value, without the value ever leaving the server:
 
    For `postgres-auth`, use `\getenv pw POSTGRES_PASSWORD` and `ALTER ROLE postgres …`. Only admins
    can `exec`, and the local socket needs no password.
-4. `kubectl -n relay rollout restart deployment/relay-api`, so the API reads the new `url`.
+4. `kubectl -n relay rollout restart deployment/relay-api deployment/relay-worker`, so both read
+   the new `url`: environment variables are read only when a pod starts. The migrate Job and the
+   backup CronJob need nothing, because each new Job reads the Secret when it starts.
 5. Check a login from another pod (section 6).
 
 Tested on 31 Oct (locally, same image): the new password, containing `'`, `;`, `$` and `"`,
@@ -336,8 +338,10 @@ not rehearsed; stop on any failure, leaving traffic stopped until the checks pas
    kubectl -n relay get jobs
    ```
 
-3. Scale API and worker to zero and wait until their pods are gone. Both currently use fixed
-   replicas. If autoscaling is added later, review this stop procedure before using it.
+3. Scale API and worker to zero and wait until their pods are gone. The worker has a fixed
+   replica count; the API has an autoscaler (2 to 4 pods). Scaling the API to 0 does not fight
+   it: the autoscaler pauses itself (`ScalingActive=False`) while its target is at 0, and
+   step 7's `--replicas=2` wakes it again.
 
    ```bash
    kubectl -n relay scale deployment/relay-api deployment/relay-worker --replicas=0
