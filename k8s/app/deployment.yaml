@@ -10,9 +10,19 @@ metadata:
   labels:
     app.kubernetes.io/name: relay-api
 spec:
-  # Two pods from day one, behind one Service (VG1). In Phase 8 the autoscaler (HPA)
-  # takes over the count and this line goes away.
-  replicas: 2
+  # No `replicas:` on purpose. The autoscaler in k8s/platform/api-hpa.yaml owns the count now
+  # (2 to 4 pods, by CPU). Keeping it here as well would mean every deploy overwrote whatever
+  # the autoscaler had decided, snapping a busy API back to 2 pods mid-release.
+  #
+  # READ THIS BEFORE MERGING. `kubectl apply` deletes a field that it applied last time and is
+  # missing now, so the first deploy after this merge would set the count to 1 - measured with
+  # `apply --dry-run=server -o jsonpath={.spec.replicas}`, which answered 1 while the live
+  # Deployment said 2. The autoscaler would repair it, but only after its 15 s sync plus a new
+  # pod becoming ready: 20-40 s on one pod, during a rollout.
+  #
+  # So the field is removed from kubectl's last-applied annotation first, on the server, right
+  # before merging - then there is nothing to delete and the count never drops. The exact
+  # commands and the order are in k8s/README.md, "The API's autoscaler".
   selector:
     matchLabels:
       app.kubernetes.io/name: relay-api   # manage the pods that carry this label...
