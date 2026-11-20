@@ -115,7 +115,7 @@ Both the API and the dashboard follow it; changes to it go through a PR first.
 | Observability | Slim kube-prometheus-stack + Loki + Alloy (Promtail is end-of-life); Grafana Cloud free tier as fallback | Datadog |
 | Backups | Nightly CronJob: `pg_dump` → **Amazon S3** (eu-north-1), one timed restore | Volume snapshots, R2, B2 |
 | IaC | Kubernetes YAML and scripts in git; **Terraform only for the S3 backup bucket** and its IAM user | Terraform for everything (no provider for one.com or get.tech; Helm via Terraform needs 6443) |
-| Scaling / zero downtime | **Planned, never built:** an HPA on the API (2–4 pods, which would mean dropping `replicas:`). Today every Deployment pins its replicas by hand; workers fixed at 2; RollingUpdate maxUnavailable 0, readiness probe, preStop sleep, graceful SIGTERM | KEDA (stretch), blue-green |
+| Scaling / zero downtime | An HPA on the API (`k8s/platform/api-hpa.yaml`, applied by hand): 2–4 pods at 70 % of the 100m CPU request, up 2 pods per 30 s, down 1 per minute after 5 minutes of calm. The API Deployment has no `replicas:` (the HPA owns the count); workers and dashboard are fixed at 2. RollingUpdate maxUnavailable 0, readiness probe, preStop sleep, graceful SIGTERM | KEDA (stretch), blue-green |
 
 **Left out on purpose:** rate limiting per IP (Traefik sees every client as `10.42.0.1`),
 encrypting the signing-secret column (we protect the backups instead), OpenAPI tooling
@@ -124,6 +124,9 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
 ## Infrastructure facts
 
 - **VPS:** one.com, Ubuntu 26.04, 4 vCPU / 8 GB / 200 GB, hostname `cloud-server-10692294`.
+- **Kernel:** pinned to 7.0.0-38 since 19 Nov. Kernel 7.0.0-43 made AppArmor block the signals
+  Postgres's processes send each other, and Postgres froze. The pin, its checks and how to remove
+  it: [`infra/server/README.md`](../infra/server/README.md), "Reboots".
 - **Access:** personal users `devinder` and `abdikhani`, SSH keys only, no root login.
   Log in with `ssh relay` (alias in each person's `~/.ssh/config`). `administrator` is
   one.com's default account, kept as a backup.
@@ -140,9 +143,9 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
   user `deploy`, whose key can only start `/usr/local/bin/relay-deploy`. The script deploys a
   commit only if it is on main, using the Kubernetes account `deployer` (namespace `relay`
   only, no Secrets). Which folder is applied how: [`k8s/README.md`](../k8s/README.md).
-- **Two replicas, one node:** the API runs 2 pods behind Traefik. That gives zero-downtime
-  rollouts and protection against one crashing process. It is **not** high availability: if
-  the VPS goes down, everything is down.
+- **Two replicas, one node:** the API runs 2 pods behind Traefik (up to 4 under load). That
+  gives zero-downtime rollouts and protection against one crashing process. It is **not** high
+  availability: if the VPS goes down, everything is down.
 - **Domain:** `myrelay.tech`, DNS at get.tech. A records for `api`, `cdn` (the Relay dashboard)
   and `grafana` (the ops dashboard: metrics and logs) all point to the VPS. **No AAAA records**:
   the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
@@ -232,6 +235,12 @@ would mix the CLI's JSON into the dump. Still missing: an alert when a night fai
 Phase 8 (VG under load) is done (7 Nov): an autoscaler holds the API between 2 and 4 pods
 (#45). Under 80 k6 users it went from 2 to 4 pods in 66 s and back to 2 in 6 m 07 s, with
 437,991 requests and 0 failed (#47).
+
+19 Nov, the first reboot since 22 Oct (for kernel security updates): kernel 7.0.0-43 froze
+Postgres, and the API was down for about 50 minutes. AppArmor refused the signals Postgres's
+processes use to wake each other, so logins hung until all 100 connection slots were full. The
+server now boots the previous kernel, 7.0.0-38 (back within two minutes, no data lost);
+a real fix for newer kernels is open. Details in `infra/server/README.md`, "Reboots".
 
 The plan in order: 1 walking skeleton · 2 database foundation · 3 core API · 4 worker ·
 5 dashboard on cdn (Abdikhani, in parallel) · 6 backups + Terraform (Abdikhani, in parallel) ·

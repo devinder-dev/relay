@@ -29,6 +29,7 @@ run alone, never inside a pasted block.
 | Updates | `sudo apt update && sudo apt full-upgrade -y`, then `sudo dpkg-reconfigure -plow unattended-upgrades` (daily security updates) |
 | SSH | `sudo install -m 644 /tmp/sshd-hardening.conf /etc/ssh/sshd_config.d/00-hardening.conf && sudo sshd -t && sudo systemctl restart ssh`. Test a new login in a second terminal before closing the first |
 | Firewall | `sudo bash /tmp/firewall.sh` |
+| Kernel | Until the AppArmor problem in [Reboots](#reboots) is solved, boot a kernel that passes the Postgres checks there (today 7.0.0-38, pinned in GRUB) |
 
 ## 3. Kubernetes (steps 0.8–0.11)
 
@@ -386,7 +387,7 @@ That is **at-least-once delivery**: receivers must drop duplicates by `webhook-i
 `unattended-upgrades` installs security updates every day but never reboots by itself
 (`Automatic-Reboot` stays off, so a demo is never interrupted). After a kernel update
 (`/var/run/reboot-required` exists), reboot by hand at a quiet time, never in the week of the
-defense.
+defense, and tell the other person first: the API is down for one to two minutes.
 
 - **Before:** check that the running version is the last deploy, so a reboot can't quietly
   bring back an old image: `curl -s https://api.myrelay.tech/version` must show the same
@@ -396,4 +397,65 @@ defense.
   docs-only merge.
 - **After:** `/version` answers again with that same commit, and `kubectl -n relay get pods`
   shows `postgres-0` and the API pods ready. Postgres can come up after the API: the API
-  waits for it (from step 2.6).
+  waits for it (from step 2.6). Then three checks that a Ready pod alone doesn't prove:
+  - `uname -r` shows the kernel you expected (see the pin below).
+  - Postgres accepts a real login:
+    `kubectl -n relay exec postgres-0 -- timeout 10 psql -U postgres -X -At -c "select 1"`
+    prints `1`. Its readiness check, `pg_isready`, only asks whether a server answers, and it
+    counts "too many clients" as an answer: on 19 Nov the pod turned Ready exactly when Postgres
+    was completely full.
+  - No signal denials for Postgres from AppArmor (on the server; sudo asks for your password):
+    `sudo journalctl -k -b --no-pager | awk '/apparmor="DENIED" operation="signal"/ && /comm="postgres"/ {d++} END {print NR " kernel lines, " d+0 " Postgres signal denials"}'`
+    prints `N kernel lines, 0 Postgres signal denials`, and N must be large. Without sudo (our
+    user is not in the `adm` group) or when sudo fails, the command can't read the kernel log:
+    N is 0 or 1, and the 0 proves nothing. Count only `comm="postgres"`: a shell started with
+    `kubectl exec` can get the stacked label even on 7.0.0-38, so a test `kill` from such a
+    shell is refused there too.
+
+### The kernel pin (since 19 Nov 2026)
+
+The server boots kernel **7.0.0-38**, not the newest one. GRUB normally starts entry 0, the
+newest kernel (`GRUB_DEFAULT=0`, with a hidden menu and no timeout, so nobody can pick at boot).
+This file, read after the cloud image's settings, overrides that:
+
+```
+# /etc/default/grub.d/99-relay-kernel-pin.cfg
+GRUB_DEFAULT="gnulinux-advanced-a9c87573-c170-44a0-8c14-09fcc03a56a9>gnulinux-7.0.0-38-generic-advanced-a9c87573-c170-44a0-8c14-09fcc03a56a9"
+```
+
+The value is "submenu id > entry id", because older kernels sit in the submenu "Advanced options
+for Ubuntu". The ids contain the root filesystem's UUID, so on another server read them with
+`sudo grep -E '^\s*(menuentry|submenu) ' /boot/grub/grub.cfg`. After changing the file, run
+`sudo update-grub` and check that `sudo grep -n 'set default=' /boot/grub/grub.cfg` shows the
+pinned entry. If GRUB can't find it, it falls back to entry 0, so a typo can't stop the server
+from booting.
+
+`unattended-upgrades` keeps installing newer kernels; they are not booted while the pin is there.
+
+**Removing the pin** (only after a newer kernel, or a k3s/containerd update, has fixed the
+problem): delete the file, `sudo update-grub`, reboot at a quiet time, and run all the "After"
+checks above. If a signal denial shows up, put the file back, `sudo update-grub` and reboot.
+
+### 19 Nov 2026: Postgres froze after a reboot into 7.0.0-43
+
+The first reboot since 22 Oct, to apply kernel security updates. The API was down for about 50
+minutes; the dashboard on cdn stayed up and no data was lost.
+
+- **What we saw, in order:** the API and worker crash-looped. First `ENOTFOUND` (the headless
+  Service `postgres` only has a DNS record while the pod is Ready), then SQLSTATE `53300`, "too
+  many connections". All 100 slots were held by `postgres: postgres postgres 127.0.0.1
+  authentication`: the readiness check's own logins, hung, their client long gone (`CLOSE_WAIT`).
+  Postgres could not stop either, and was killed after its 60 s grace period.
+- **Cause:** Postgres's processes wake each other with a signal (`SIGURG`). Under 7.0.0-43 the
+  container's processes got the stacked AppArmor label `cri-containerd.apparmor.d//&unconfined`,
+  and the runtime's profile only allows signals to `cri-containerd.apparmor.d`, so the kernel
+  refused them: `apparmor="DENIED" operation="signal" ... comm="postgres" signal=urg`. So logins
+  hung, most likely waiting for a process that was never woken. Only timers still worked: after
+  a restart, the end-of-recovery checkpoint started exactly 5 minutes late, on
+  `checkpoint_timeout`. The API and the worker (one Bun process each) were not affected, and
+  nginx kept serving cdn: it signals its own worker processes only to reload or stop.
+- **Fix:** the kernel pin above, then a second reboot. The API answered again within two
+  minutes, Postgres's main process had the plain label `cri-containerd.apparmor.d`, and its
+  end-of-recovery checkpoint started at once instead of 5 minutes late. The kernel was the only
+  relevant change: k3s (which brings its own container runtime) was still v1.36.5, and the apt
+  history since 16 Oct shows no AppArmor, containerd or runc package.
