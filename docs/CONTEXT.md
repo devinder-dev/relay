@@ -89,7 +89,8 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
 `/metrics` is an internal-only Prometheus endpoint on port 9090 (API) or 9091 (worker), exposing
 bounded HTTP and worker metrics. Errors: `{"error":{"code","message","request_id"}}`. Another
-owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
+owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`,
+`https://myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
 Owners and API keys are created with a `create-owner` script (no signup page).
 **The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
 Both the API and the dashboard follow it; changes to it go through a PR first.
@@ -148,8 +149,10 @@ encrypting the signing-secret column (we protect the backups instead), OpenAPI t
 - **Two replicas, one node:** the API runs 2 pods behind Traefik (up to 4 under load). That
   gives zero-downtime rollouts and protection against one crashing process. It is **not** high
   availability: if the VPS goes down, everything is down.
-- **Domain:** `myrelay.tech`, DNS at get.tech. A records for `api`, `cdn` (the Relay dashboard)
-  and `grafana` (the ops dashboard: metrics and logs) all point to the VPS. **No AAAA records**:
+- **Domain:** `myrelay.tech`, DNS at get.tech. A records for `@`, `api`, `cdn` (the live Relay
+  dashboard) and `grafana` (the ops dashboard: metrics and logs) point to `81.88.23.71`. The
+  additional dashboard hostname `https://myrelay.tech` is served after this PR is merged and
+  deployed. **No AAAA records**:
   the cluster is IPv4-only, and Let's Encrypt prefers IPv6 when it exists.
 - **HTTP → HTTPS:** `k8s/platform/traefik-config.yaml` (a HelmChartConfig) redirects port 80 to
   443 for every host with a permanent redirect (301 for GET, 308 for other methods, so a POST

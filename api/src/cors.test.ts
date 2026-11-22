@@ -10,7 +10,7 @@ const app = buildApp(config, { sql }, { logger: false });
 afterAll(async () => { await app.close(); await sql.end({ timeout: 5 }); });
 const origin = "https://cdn.myrelay.tech";
 // Step 1: a browser's unauthenticated preflight finishes before the v1 auth hook.
-for (const allowed of [origin, "http://localhost:4173"]) {
+for (const allowed of [origin, "https://myrelay.tech", "http://localhost:4173"]) {
   test(`preflight permits ${allowed} and the retry-key header`, async () => {
     const res = await app.inject({ method: "OPTIONS", url: "/v1/events", headers: {
       origin: allowed, "access-control-request-method": "POST",

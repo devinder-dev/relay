@@ -1,9 +1,9 @@
-# The Relay dashboard on https://cdn.myrelay.tech: static files built by Vite and
-# served by nginx. Deployment, Service and Ingress, like the API's own manifests in
+# The Relay dashboard on https://cdn.myrelay.tech and https://myrelay.tech: static files built
+# by Vite and served by nginx. Deployment, Service and Ingress, like the API's own manifests in
 # k8s/app/, with four differences: port 8080 instead of 80 (the unprivileged nginx
 # image cannot bind a low port), probes so a rollout never sends traffic to a pod
 # that is not serving yet, small resource requests because the VPS is shared with
-# Postgres, the API and Grafana, and cdn.myrelay.tech instead of api.myrelay.tech.
+# Postgres, the API and Grafana, and the dashboard hostnames instead of api.myrelay.tech.
 
 apiVersion: apps/v1
 kind: Deployment
@@ -123,8 +123,21 @@ spec:
     - hosts:
         - cdn.myrelay.tech
       secretName: cdn-myrelay-tech-tls
+    - hosts:
+        - myrelay.tech
+      secretName: myrelay-tech-tls
   rules:
     - host: cdn.myrelay.tech
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: relay-dashboard
+                port:
+                  number: 80
+    - host: myrelay.tech
       http:
         paths:
           - path: /

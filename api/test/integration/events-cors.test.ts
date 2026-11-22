@@ -14,3 +14,13 @@ test("GET me from the dashboard returns identity and exposed request id", async 
   expect(res.headers["access-control-allow-origin"]).toBe("https://cdn.myrelay.tech");
   expect(res.headers["access-control-expose-headers"]).toContain("x-request-id");
 });
+test("GET me from the root dashboard returns identity and exposed request id", async () => {
+  const a = await f.owner();
+  const res = await f.app.inject({ url: "/v1/me", headers: {
+    origin: "https://myrelay.tech", authorization: `Bearer ${a.key}`,
+  } });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().owner.id).toBe(a.owner.id);
+  expect(res.headers["access-control-allow-origin"]).toBe("https://myrelay.tech");
+  expect(res.headers["access-control-expose-headers"]).toContain("x-request-id");
+});
