@@ -408,11 +408,32 @@ tests:
       - eval_time: 20m
         alertname: RelayBackupJobFailed
         exp_alerts: []
-  - name: backup_overdue_alerts_after_27_hours
+  - name: backup_overdue_alerts_after_27_hours_since_a_success
     interval: 1m
     input_series:
       - series: 'kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"}'
+        values: '100+0x1700'
+    alert_rule_test:
+      - eval_time: 28h
+        alertname: RelayBackupOverdue
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayBackupOverdue
+              cronjob: relay-backup
+              namespace: relay
+              severity: critical
+            exp_annotations:
+              summary: Relay database backup is overdue
+              description: relay-backup has not recorded a successful run for 27 hours.
+  - name: failed_first_backup_alerts_after_bootstrap_grace_without_success_metric
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="relay",cronjob="relay-backup"}'
         values: '0+0x1700'
+      - series: 'kube_job_created{namespace="relay",job_name="relay-backup-1"}'
+        values: '100+0x1700'
+      - series: 'kube_job_status_failed{namespace="relay",job_name="relay-backup-1"}'
+        values: '1+0x1700'
     alert_rule_test:
       - eval_time: 28h
         alertname: RelayBackupOverdue

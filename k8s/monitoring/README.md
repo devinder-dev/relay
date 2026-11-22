@@ -103,20 +103,22 @@ has a Kubernetes wrapper, so use the repository helper rather than passing it di
 PROMTOOL=/path/to/promtool bash scripts/test-prometheus-rules.sh
 ```
 
-Rollback is reversible and does not affect API traffic: an administrator deletes the dashboard
-ConfigMap, ServiceMonitors, PrometheusRule and `metrics-ingress.yaml`, then rolls back the
-application commit through the normal `relay-deploy` path. The deployer deliberately cannot delete
-the new worker metrics Service, so delete `service/relay-worker-metrics` manually in namespace
-`relay` after rolling back to a revision that predates it. Do not delete existing Helm releases,
-Prometheus PVC or Loki PVC as part of an alert rollback.
+Rollback is reversible and does not affect API traffic: first roll back the application commit
+through the normal `relay-deploy` path while `metrics-ingress.yaml` still protects the old metrics
+ports. Then an administrator deletes the dashboard ConfigMap, ServiceMonitors, PrometheusRule and
+the now-unused worker metrics Service. Delete `metrics-ingress.yaml` last. The deployer deliberately
+cannot delete that Service. Do not delete existing Helm releases, Prometheus PVC or Loki PVC as
+part of an alert rollback.
 
 ```sh
+# Roll back the application commit through relay-deploy first.
 ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-servicemonitors.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-alert-rules.yaml
-ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/platform/metrics-ingress.yaml
 # After the application rollback, only when the Service is no longer in its manifests:
 ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay delete service relay-worker-metrics'
+# Keep metrics restricted until the old ports and Service have gone.
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/platform/metrics-ingress.yaml
 ```
 
 ## Its own namespace, and what it costs the node

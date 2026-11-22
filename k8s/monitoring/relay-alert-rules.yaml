@@ -169,7 +169,9 @@ spec:
             summary: Relay database backup job failed
             description: A relay-backup Job failed after the last successful backup; inspect its pod logs before the next backup window.
         - alert: RelayBackupOverdue
-          expr: time() - kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"} > 97200
+          # kube-state-metrics omits last_successful_time until the first successful Job. Fall
+          # back to the CronJob creation time so a broken new backup installation is visible too.
+          expr: (time() - kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"} > 97200) or ((time() - kube_cronjob_created{namespace="relay",cronjob="relay-backup"} > 97200) unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"})
           for: 30m
           labels:
             severity: critical
