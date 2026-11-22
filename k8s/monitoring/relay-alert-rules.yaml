@@ -39,12 +39,20 @@ spec:
             summary: Relay API replica metric is missing
             description: kube-state-metrics no longer reports relay-api availability, so replica alerts cannot be trusted.
         - alert: RelayApiMetricsTargetDown
-          expr: max(up{namespace="relay",service="relay-api",endpoint="metrics"}) == 0
+          expr: (up{namespace="relay",service="relay-api",endpoint="metrics"} == 0) unless on (namespace, service, endpoint) (max by (namespace, service, endpoint) (up{namespace="relay",service="relay-api",endpoint="metrics"}) == 0)
           for: 5m
           labels:
             severity: warning
           annotations:
             summary: Relay API metrics target is down
+            description: A discovered Relay API metrics target has failed to scrape for five minutes.
+        - alert: RelayApiMetricsAllTargetsDown
+          expr: max(up{namespace="relay",service="relay-api",endpoint="metrics"}) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: All Relay API metrics targets are down
             description: Every discovered Relay API metrics target has failed to scrape for five minutes.
         - alert: RelayApiMetricsTargetMissing
           expr: absent(up{namespace="relay",service="relay-api",endpoint="metrics"})
@@ -55,12 +63,20 @@ spec:
             summary: Relay API metrics target is missing
             description: Prometheus discovered no Relay API metrics target; check the Service and ServiceMonitor selectors.
         - alert: RelayWorkerMetricsTargetDown
-          expr: max(up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"}) == 0
+          expr: (up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"} == 0) unless on (namespace, service, endpoint) (max by (namespace, service, endpoint) (up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"}) == 0)
           for: 5m
           labels:
             severity: warning
           annotations:
             summary: Relay worker metrics target is down
+            description: A discovered Relay worker metrics target has failed to scrape for five minutes.
+        - alert: RelayWorkerMetricsAllTargetsDown
+          expr: max(up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"}) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: All Relay worker metrics targets are down
             description: Every discovered Relay worker metrics target has failed to scrape for five minutes.
         - alert: RelayWorkerMetricsTargetMissing
           expr: absent(up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"})

@@ -70,16 +70,18 @@ remain distinct from delivered notifications.
 sidecar. It uses the existing Prometheus datasource (`uid: prometheus`); Loki remains the place to
 inspect individual delivery logs.
 
-Apply these after the Helm releases, as an administrator (the CI deployer intentionally has no
-custom-resource permissions):
+Apply the platform NetworkPolicy first, then deploy the application commit that exposes its metrics
+ports, and finally apply the ServiceMonitors, rules, and dashboard as an administrator. The CI
+deployer intentionally has no custom-resource permissions:
 
 ```sh
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/platform/metrics-ingress.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/platform/metrics-ingress.yaml
+# Deploy the application commit through the normal relay-deploy path here.
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-servicemonitors.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-alert-rules.yaml
-ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/platform/metrics-ingress.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-servicemonitors.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-alert-rules.yaml
-ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/platform/metrics-ingress.yaml
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
 ```
 
@@ -87,7 +89,7 @@ After the application commit is deployed, verify targets and rules rather than a
 selectors or chart defaults match:
 
 ```sh
-kubectl -n monitoring get servicemonitor
+kubectl -n relay get servicemonitor
 kubectl -n monitoring get prometheusrule relay
 kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090
 # In another terminal: curl -fsS http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.namespace == "relay") | {labels,health}'
@@ -104,9 +106,18 @@ PROMTOOL=/path/to/promtool bash scripts/test-prometheus-rules.sh
 Rollback is reversible and does not affect API traffic: an administrator deletes the dashboard
 ConfigMap, ServiceMonitors, PrometheusRule and `metrics-ingress.yaml`, then rolls back the
 application commit through the normal `relay-deploy` path. The deployer deliberately cannot delete
-the new worker metrics Service, so delete `service/relay-worker-metrics` manually after rolling
-back to a revision that predates it. Do not delete existing Helm releases, Prometheus PVC or Loki
-PVC as part of an alert rollback.
+the new worker metrics Service, so delete `service/relay-worker-metrics` manually in namespace
+`relay` after rolling back to a revision that predates it. Do not delete existing Helm releases,
+Prometheus PVC or Loki PVC as part of an alert rollback.
+
+```sh
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-alert-rules.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/platform/metrics-ingress.yaml
+# After the application rollback, only when the Service is no longer in its manifests:
+ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay delete service relay-worker-metrics'
+```
 
 ## Its own namespace, and what it costs the node
 
