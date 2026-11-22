@@ -61,6 +61,10 @@ spec:
           ports:
             - name: http                  # probes, the Service and the Ingress use this name
               containerPort: 8080
+            # Prometheus reaches this only through relay-api's ClusterIP Service. There is no
+            # Ingress route for it, so customer traffic cannot read operational data.
+            - name: metrics
+              containerPort: 9090
           # Where Postgres is, with the relay login in it: straight from the Secret relay-db
           # (made on the server by bootstrap-secrets.sh), never written in git. If the Secret
           # is missing, the pod can't start, so the rollout fails and relay-deploy rolls back.

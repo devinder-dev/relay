@@ -1,0 +1,66 @@
+# Rules are evaluated by Prometheus. They appear in Grafana and Prometheus even though
+# Alertmanager intentionally has no external receiver yet; do not claim that these page anyone.
+# Each rule has a sustained `for` and traffic floor where applicable to prevent rollout and
+# one-request false positives on this small service.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: relay
+  namespace: monitoring
+  labels:
+    # kube-prometheus-stack's default rule selector requires its Helm release label.
+    release: monitoring
+spec:
+  groups:
+    - name: relay.availability
+      rules:
+        - alert: RelayApiUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="relay",deployment="relay-api"} < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Relay API has no available pod
+            description: The API deployment has had zero available replicas for five minutes.
+        - alert: RelayApiHighErrorRate
+          expr: (sum(rate(relay_http_requests_total{status_code=~"5.."}[5m])) / sum(rate(relay_http_requests_total[5m])) > 0.05) and (sum(rate(relay_http_requests_total[5m])) > 0.1)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API 5xx rate exceeds 5 percent
+            description: More than 5% of at least 30 requests per five minutes have been 5xx for ten minutes.
+        - alert: RelayApiHighLatency
+          expr: (histogram_quantile(0.95, sum by (le) (rate(relay_http_request_duration_seconds_bucket[5m]))) > 1) and (sum(rate(relay_http_request_duration_seconds_count[5m])) > 0.1)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API p95 latency exceeds one second
+            description: p95 latency is over one second with at least 30 requests per five minutes for ten minutes.
+        - alert: RelayWorkerLoopErrors
+          expr: sum(increase(relay_worker_loop_errors_total[15m])) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay worker loop is repeatedly failing
+            description: More than three worker loop or finalization errors occurred in 15 minutes.
+    - name: relay.backup
+      rules:
+        - alert: RelayBackupJobFailed
+          expr: max(kube_job_status_failed{namespace="relay",job_name=~"relay-backup-.*"}) > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Relay database backup job failed
+            description: A retained relay-backup Job has failed; inspect its pod logs before the next backup window.
+        - alert: RelayBackupOverdue
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"} > 97200
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: Relay database backup is overdue
+            description: relay-backup has not recorded a successful run for 27 hours.

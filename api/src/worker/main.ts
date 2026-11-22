@@ -6,6 +6,7 @@ import { startHealth } from "./health.ts";
 import { createStop, runLoop } from "./loop.ts";
 import { createLog, errorCode, type WorkerLog } from "./log.ts";
 import { sendWebhook } from "./send.ts";
+import { Metrics } from "../metrics.ts";
 
 // Step 1: install handlers before waiting for a connection or opening a health port.
 const stop = createStop();
@@ -25,6 +26,7 @@ process.on("SIGTERM", signal);
 process.on("SIGINT", signal);
 let db: ReturnType<typeof createDb> | undefined;
 let health: ReturnType<typeof startHealth> | undefined;
+const metrics = new Metrics();
 try {
   const config = loadWorkerConfig();
   log = createLog(config.LOG_LEVEL);
@@ -37,9 +39,9 @@ try {
   if (!stop.signal.aborted) {
     // Step 2: health starts only after the database answers once; outages remain recoverable.
     const heartbeat = { last: performance.now() };
-    health = startHealth(config.HEALTH_PORT, heartbeat);
+    health = startHealth(config.HEALTH_PORT, heartbeat, undefined, metrics);
     log("info", "✅ worker ready", { health_port: health.port });
-    await runLoop({ db, config, log, stop, heartbeat, activeLeases,
+    await runLoop({ db, config, log, stop, heartbeat, activeLeases, metrics,
       send: (input) => sendWebhook(input, { lookup: realLookup, allowOrigins: config.SSRF_ALLOW_ORIGINS,
         logCode: (code) => log("warn", "⚠️ unclassified send error", { code }) }) });
   }

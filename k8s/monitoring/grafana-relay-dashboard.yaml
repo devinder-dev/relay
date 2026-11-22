@@ -1,0 +1,24 @@
+# Grafana's dashboard sidecar watches this label. The dashboard is intentionally compact: the
+# detailed incident investigation remains in logs (Loki) and the Prometheus alert view.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-relay-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  relay-overview.json: |
+    {
+      "title": "Relay overview",
+      "uid": "relay-overview",
+      "schemaVersion": 41,
+      "version": 1,
+      "time": {"from": "now-6h", "to": "now"},
+      "panels": [
+        {"id": 1, "title": "API request rate", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum(rate(relay_http_requests_total[5m]))", "legendFormat": "requests/s", "refId": "A"}], "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}},
+        {"id": 2, "title": "API 5xx rate", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum(rate(relay_http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(relay_http_requests_total[5m]))", "legendFormat": "5xx ratio", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}},
+        {"id": 3, "title": "API p95 latency", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(relay_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}},
+        {"id": 4, "title": "Worker delivery outcomes", "type": "timeseries", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum by (outcome) (rate(relay_worker_delivery_attempts_total[5m]))", "legendFormat": "{{outcome}}", "refId": "A"}], "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}}
+      ]
+    }

@@ -5,11 +5,13 @@ import { retryDelayMs, type WorkerConfig } from "./config.ts";
 import type { WorkerLog } from "./log.ts";
 import { systemClock, type Clock, type SendResult, type WebhookInput } from "./send.ts";
 import { buildBody, signatureHeaders } from "./sign.ts";
+import type { Metrics } from "../metrics.ts";
 
 export type Send = (input: WebhookInput) => Promise<SendResult>;
 export type ProcessDeps = {
   db: Sql; config: Pick<WorkerConfig, "RETRY_SCHEDULE" | "RETRY_JITTER" | "maxTries">;
   send: Send; log: WorkerLog; clock?: Clock;
+  metrics?: Metrics;
 };
 // Step 1: a deleted endpoint consumes no HTTP request and creates no history row.
 export async function processDelivery(row: ClaimedRow, deps: ProcessDeps) {
@@ -19,7 +21,8 @@ export async function processDelivery(row: ClaimedRow, deps: ProcessDeps) {
     deps.log(outcome === "lease_lost" ? "warn" : "info", outcome === "lease_lost" ? "⚠️ lease_lost" : "✅ endpoint deleted", {
       delivery_id: row.id, lease_id: row.lease_id, outcome,
     });
-    return;
+    if (outcome === "ok") deps.metrics?.observeDelivery("deleted");
+    return outcome;
   }
   // Step 2: construct bytes once; the fresh signature covers precisely those bytes.
   const body = buildBody({ type: row.type, createdAt: row.event_created_at, payload: row.payload });
@@ -37,4 +40,6 @@ export async function processDelivery(row: ClaimedRow, deps: ProcessDeps) {
     attempt: row.attempts, status_code: attempt.statusCode, error: attempt.error, duration_ms: attempt.durationMs,
     outcome: outcome === "lease_lost" ? outcome : status,
   });
+  if (outcome === "ok") deps.metrics?.observeDelivery(status === "pending" ? "retry" : status, attempt.durationMs / 1000);
+  return outcome;
 }

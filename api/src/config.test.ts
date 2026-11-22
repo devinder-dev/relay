@@ -10,6 +10,7 @@ describe("loadConfig", () => {
     expect(loadConfig(DB)).toEqual({
       SSRF_ALLOW_ORIGINS: [],
       PORT: 8080,
+      METRICS_PORT: 9090,
       GIT_SHA: "dev",
       LOG_LEVEL: "info",
       DATABASE_URL: "postgres://test@localhost/test",
@@ -19,6 +20,7 @@ describe("loadConfig", () => {
 
   test("turns PORT from text into a number", () => {
     expect(loadConfig({ ...DB, PORT: "3000" }).PORT).toBe(3000);
+    expect(loadConfig({ ...DB, METRICS_PORT: "9091" }).METRICS_PORT).toBe(9091);
   });
 
   test("refuses a PORT that is not a valid port", () => {
@@ -26,6 +28,7 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...DB, PORT: "70000" })).toThrow(/PORT/);
     expect(() => loadConfig({ ...DB, PORT: "3000abc" })).toThrow(/PORT/);
     expect(() => loadConfig({ ...DB, PORT: "80.5" })).toThrow(/PORT/);
+    expect(() => loadConfig({ ...DB, METRICS_PORT: "70000" })).toThrow(/METRICS_PORT/);
   });
 
   test("refuses an unknown LOG_LEVEL", () => {

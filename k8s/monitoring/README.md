@@ -1,4 +1,4 @@
-# Metrics and logs (Phase 7)
+# Metrics, logs and alerts (Phase 7)
 
 Prometheus, Grafana, Loki and Alloy, in namespace `monitoring`. Installed with Helm on
 3 November 2026 and **running in production since then** - but until this folder existed they
@@ -43,6 +43,49 @@ answered the sidecar's reload with `200 OK {"message":"Datasources config reload
 ```sh
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-loki-datasource.yaml
 ```
+
+## Relay application metrics and alert rules
+
+The API and worker expose a Prometheus-format `/metrics` endpoint on port 9090. It has no
+Ingress and is reachable only via ClusterIP Services. The metric labels are deliberately bounded:
+HTTP method, route template and response status, plus a small delivery outcome set. They never
+contain customer URLs, ids, API keys, request ids or payload values.
+
+`relay-servicemonitors.yaml` creates exactly two 30-second scrape targets: the API and worker.
+`relay-alert-rules.yaml` adds availability, sustained API 5xx/latency, worker-loop-error and
+backup-failure/overdue rules. Prometheus evaluates them and Grafana displays their state. They do
+**not** notify anyone yet: Alertmanager remains disabled until an approved notification receiver
+and its Secret are supplied. This is safer than pretending an unowned email or webhook is an
+incident channel.
+
+`grafana-relay-dashboard.yaml` is a compact dashboard provisioned through Grafana's dashboard
+sidecar. It uses the existing Prometheus datasource (`uid: prometheus`); Loki remains the place to
+inspect individual delivery logs.
+
+Apply these after the Helm releases, as an administrator (the CI deployer intentionally has no
+custom-resource permissions):
+
+```sh
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-alert-rules.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-alert-rules.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
+```
+
+After the application commit is deployed, verify targets and rules rather than assuming the
+selectors or chart defaults match:
+
+```sh
+kubectl -n monitoring get servicemonitor
+kubectl -n monitoring get prometheusrule relay
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090
+# In another terminal: curl -fsS http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.namespace == "relay") | {labels,health}'
+```
+
+Rollback is reversible and does not affect API traffic: delete the three monitoring objects, then
+roll back the application commit through the normal `relay-deploy` path. Do not delete the
+existing Helm releases, Prometheus PVC or Loki PVC as part of an alert rollback.
 
 ## Its own namespace, and what it costs the node
 
@@ -119,10 +162,12 @@ no credential in this folder and nothing to redact. Read it on the server if nee
   8 Nov. On a rebuild, apply it after the Helm releases.
 - **Infrastructure metrics: working.** Prometheus scrapes the nodes, the kubelet, CoreDNS, the
   API server and kube-state-metrics.
-- **Application metrics: none.** Relay exposes no `/metrics` endpoint and no ServiceMonitor
-  targets our pods, so nothing is collected about events, deliveries or retries. That is the
-  remaining gap in G6, and `docs/CONTEXT.md` records it.
-- **No alerting.** Alertmanager is disabled.
+- **Application metrics: collected.** The API reports request count and latency; workers report
+  finalized delivery outcomes, attempt duration and loop errors. Two ServiceMonitors scrape only
+  their internal port 9090 endpoints.
+- **Alert rules: evaluated, not delivered.** Prometheus evaluates the conservative rules in this
+  folder and Grafana shows their state. Alertmanager is intentionally disabled until an owned
+  notification receiver is configured.
 - **No backup.** Loki's and Prometheus's volumes are not backed up. Losing the node loses the
   history.
 
