@@ -220,7 +220,7 @@ five tries before `dead`. The code default remains eight tries over about 21 hou
 (`5s,1m,5m,30m,2h,6h,12h` between tries, with jitter).
 
 Not implemented here: `DELETE /v1/endpoints/:id`. Application metrics are exposed only on
-ClusterIP port 9090: Prometheus scrapes bounded API request and worker delivery metrics without
+ClusterIP ports 9090 (API) and 9091 (worker): Prometheus scrapes bounded API request and worker delivery metrics without
 making them public.
 
 Autoscaling (VG3) is applied and measured, and [the k6 script](load/relay.js) is what loads it.

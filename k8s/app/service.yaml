@@ -33,5 +33,5 @@ spec:
     app.kubernetes.io/name: relay-worker
   ports:
     - name: metrics
-      port: 9090
-      targetPort: health
+      port: 9091
+      targetPort: metrics

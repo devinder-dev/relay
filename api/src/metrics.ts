@@ -32,6 +32,8 @@ export class Metrics {
   private readonly deliveryAttempts = new Map<string, number>();
   private readonly deliveryDurations = new Map<string, Histogram>();
   private workerLoopErrors = 0;
+  private databaseQuerySuccess: number | undefined;
+  private databaseQueryChecks = new Map<"success" | "error", number>();
 
   observeHttp(method: string, route: string, statusCode: number, durationSeconds: number) {
     const values = { method, route, status_code: String(statusCode) };
@@ -54,6 +56,12 @@ export class Metrics {
     this.workerLoopErrors += 1;
   }
 
+  recordDatabaseQuery(success: boolean) {
+    this.databaseQuerySuccess = success ? 1 : 0;
+    const outcome = success ? "success" : "error";
+    this.databaseQueryChecks.set(outcome, (this.databaseQueryChecks.get(outcome) ?? 0) + 1);
+  }
+
   render() {
     const lines = [
       "# HELP relay_http_requests_total HTTP responses produced by Relay, excluding health checks.",
@@ -67,6 +75,10 @@ export class Metrics {
     lines.push("# HELP relay_worker_delivery_duration_seconds Webhook attempt duration in seconds.", "# TYPE relay_worker_delivery_duration_seconds histogram");
     this.renderHistograms(lines, "relay_worker_delivery_duration_seconds", this.deliveryDurations, (outcome) => ({ outcome }));
     lines.push("# HELP relay_worker_loop_errors_total Worker loop errors, normally database or finalization failures.", "# TYPE relay_worker_loop_errors_total counter", `relay_worker_loop_errors_total ${this.workerLoopErrors}`);
+    lines.push("# HELP relay_database_query_success Last periodic database query result; 1 is success and 0 is failure.", "# TYPE relay_database_query_success gauge");
+    if (this.databaseQuerySuccess !== undefined) lines.push(`relay_database_query_success ${this.databaseQuerySuccess}`);
+    lines.push("# HELP relay_database_query_checks_total Periodic database query checks by outcome.", "# TYPE relay_database_query_checks_total counter");
+    for (const [outcome, value] of this.databaseQueryChecks) lines.push(`relay_database_query_checks_total${labels({ outcome })} ${value}`);
     return `${lines.join("\n")}\n`;
   }
 

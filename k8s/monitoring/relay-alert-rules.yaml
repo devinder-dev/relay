@@ -22,6 +22,54 @@ spec:
           annotations:
             summary: Relay API has no available pod
             description: The API deployment has had zero available replicas for five minutes.
+        - alert: RelayApiReplicaDegraded
+          expr: kube_deployment_status_replicas_available{namespace="relay",deployment="relay-api"} < 2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API has fewer than two available pods
+            description: The API has lost the two-pod floor required for rollout safety and process redundancy.
+        - alert: RelayApiReplicaMetricMissing
+          expr: absent(kube_deployment_status_replicas_available{namespace="relay",deployment="relay-api"})
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API replica metric is missing
+            description: kube-state-metrics no longer reports relay-api availability, so replica alerts cannot be trusted.
+        - alert: RelayApiMetricsTargetDown
+          expr: max(up{namespace="relay",service="relay-api",endpoint="metrics"}) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API metrics target is down
+            description: Every discovered Relay API metrics target has failed to scrape for five minutes.
+        - alert: RelayApiMetricsTargetMissing
+          expr: absent(up{namespace="relay",service="relay-api",endpoint="metrics"})
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay API metrics target is missing
+            description: Prometheus discovered no Relay API metrics target; check the Service and ServiceMonitor selectors.
+        - alert: RelayWorkerMetricsTargetDown
+          expr: max(up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"}) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay worker metrics target is down
+            description: Every discovered Relay worker metrics target has failed to scrape for five minutes.
+        - alert: RelayWorkerMetricsTargetMissing
+          expr: absent(up{namespace="relay",service="relay-worker-metrics",endpoint="metrics"})
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay worker metrics target is missing
+            description: Prometheus discovered no Relay worker metrics target; check the Service and ServiceMonitor selectors.
         - alert: RelayApiHighErrorRate
           expr: (sum(rate(relay_http_requests_total{status_code=~"5.."}[5m])) / sum(rate(relay_http_requests_total[5m])) > 0.05) and (sum(rate(relay_http_requests_total[5m])) > 0.1)
           for: 10m
@@ -46,16 +94,64 @@ spec:
           annotations:
             summary: Relay worker loop is repeatedly failing
             description: More than three worker loop or finalization errors occurred in 15 minutes.
+        - alert: RelayDatabaseQueryFailing
+          expr: max(relay_database_query_success) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Relay cannot complete its periodic database query
+            description: No API pod has completed the independent SELECT 1 database check for two minutes.
+        - alert: RelayDatabaseProbeMissing
+          expr: absent(relay_database_query_success)
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay database probe metric is missing
+            description: Database availability cannot be evaluated because no API probe metric is being scraped.
+        - alert: RelayNodeCpuHigh
+          expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 85
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay node CPU usage exceeds 85 percent
+            description: The single VPS has sustained CPU pressure; API latency and worker delivery can degrade.
+        - alert: RelayNodeMemoryHigh
+          expr: 100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 85
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay node memory usage exceeds 85 percent
+            description: The single VPS has sustained memory pressure and risks OOM eviction or restart.
+        - alert: RelayNodeDiskHigh
+          expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|squashfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|squashfs|overlay"} < 0.10
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay node disk usage exceeds 90 percent
+            description: The VPS root filesystem is almost full; local-path database, Prometheus and Loki data are at risk.
+        - alert: RelayContainerRestarting
+          expr: sum by (namespace, pod, container) (increase(kube_pod_container_status_restarts_total{namespace="relay"}[15m])) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Relay container is repeatedly restarting
+            description: A Relay namespace container restarted more than three times in 15 minutes.
     - name: relay.backup
       rules:
         - alert: RelayBackupJobFailed
-          expr: max(kube_job_status_failed{namespace="relay",job_name=~"relay-backup-.*"}) > 0
+          expr: max((kube_job_status_failed{namespace="relay",job_name=~"relay-backup-.*"} > 0) and on (namespace, job_name) (kube_job_created{namespace="relay",job_name=~"relay-backup-.*"} > on (namespace) group_left () kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"})) > 0
           for: 15m
           labels:
             severity: critical
           annotations:
             summary: Relay database backup job failed
-            description: A retained relay-backup Job has failed; inspect its pod logs before the next backup window.
+            description: A relay-backup Job failed after the last successful backup; inspect its pod logs before the next backup window.
         - alert: RelayBackupOverdue
           expr: time() - kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"} > 97200
           for: 30m

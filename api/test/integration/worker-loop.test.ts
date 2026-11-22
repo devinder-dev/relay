@@ -4,6 +4,7 @@ import { createReceiver } from "../../src/demo/receiver.ts";
 import { createStop, runLoop } from "../../src/worker/loop.ts";
 import { processDelivery } from "../../src/worker/process.ts";
 import { sendWebhook } from "../../src/worker/send.ts";
+import { Metrics } from "../../src/metrics.ts";
 import { workerFixture } from "./worker-fixture.ts";
 
 const f = workerFixture();
@@ -34,21 +35,26 @@ test("two signed failures followed by success give three history rows and delive
 });
 test("an always-failing receiver becomes dead at the budget; deleted endpoints send nothing", async () => {
   await f.seed();
+  const metrics = new Metrics();
   let hits = 0;
   const send = async () => { hits++; return { startedAt: new Date(), durationMs: 1, statusCode: 500, error: null, excerpt: "failed" }; };
   let id = "";
   for (let i = 0; i < 3; i++) {
     const row = (await f.claim())[0]!; id = row.id;
-    await processDelivery(row, { db: f.db, config: f.config, send, log: () => {} });
+    await processDelivery(row, { db: f.db, config: f.config, send, log: () => {}, metrics });
     if (i < 2) await f.expire(id);
   }
   expect(hits).toBe(3); expect((await f.row(id)).status).toBe("dead");
   const deleted = await f.seed();
   await f.db`UPDATE endpoints SET deleted_at = now() WHERE id = ${deleted.endpointId}`;
   const row = (await f.claim())[0]!;
-  await processDelivery(row, { db: f.db, config: f.config, send, log: () => {} });
+  await processDelivery(row, { db: f.db, config: f.config, send, log: () => {}, metrics });
   expect(hits).toBe(3); expect((await f.row(row.id)).last_error).toBe("endpoint_deleted");
   expect((await f.db`SELECT * FROM attempts WHERE delivery_id = ${row.id}`)).toHaveLength(0);
+  const output = metrics.render();
+  expect(output).toContain('relay_worker_delivery_attempts_total{outcome="retry"} 2');
+  expect(output).toContain('relay_worker_delivery_attempts_total{outcome="dead"} 1');
+  expect(output).toContain('relay_worker_delivery_attempts_total{outcome="deleted"} 1');
 });
 // Step 2: three loops share fifty due rows and valid leases without duplicate sends.
 test("three loops deliver fifty events exactly once within valid leases", async () => {

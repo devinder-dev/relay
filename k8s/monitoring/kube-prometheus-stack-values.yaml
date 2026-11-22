@@ -9,10 +9,8 @@
 # Why these choices:
 #
 # 7 days and 10Gi: a week of history covers the exam period and any incident we would still be
-# looking into. One node produces few series, so 7 days fits well inside 10Gi - and 10Gi is a cap
-# on a 200 GB disk, not an estimate of what we need. Worth a later PR (a values change, so its own
-# `helm upgrade`): set `retentionSize` a little under 10Gi, so Prometheus drops old data before the
-# volume fills instead of failing when it does.
+# looking into. One node produces few series, so 7 days fits well inside the 10Gi PVC. `retentionSize`
+# is deliberately 8Gi, leaving room for WAL and compaction before the local-path volume fills.
 #
 # Alertmanager off: there is no receiver - no email, Slack or pager - and nobody on call, so alerts
 # would go nowhere and still cost memory. We check by hand, the same honest line the backup runbook
@@ -57,6 +55,9 @@ prometheus:
         cpu: 100m
         memory: 512Mi
     retention: 7d
+    # Keep a 2Gi safety margin in the 10Gi PVC. On local-path, exhausting this filesystem can
+    # stop Prometheus before time retention gets a chance to compact old blocks.
+    retentionSize: 8Gi
     storageSpec:
       volumeClaimTemplate:
         spec:

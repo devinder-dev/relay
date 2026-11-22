@@ -4,6 +4,7 @@ import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { createDb, waitForDatabase } from "./db.ts";
 import { Metrics, startMetricsServer } from "./metrics.ts";
+import { startDatabaseProbe } from "./database-probe.ts";
 
 // Step 1: the config. A bad environment stops the app here, with a clear message.
 const config = loadConfig();
@@ -13,6 +14,7 @@ const metrics = new Metrics();
 const sql = createDb(config);
 const app = buildApp(config, { sql }, { metrics });
 let metricsServer: ReturnType<typeof startMetricsServer> | undefined;
+let databaseProbe: ReturnType<typeof startDatabaseProbe> | undefined;
 
 // When Kubernetes sends SIGTERM or Ctrl+C sends SIGINT: stop taking requests and let running
 // ones finish, then close the database connections (queries get 5 s), then exit.
@@ -23,6 +25,7 @@ async function shutdown(signal: string) {
   try {
     await app.close();
     metricsServer?.stop(true);
+    databaseProbe?.stop();
     await sql.end({ timeout: 5 });
     process.exit(0);
   } catch (error) {
@@ -48,4 +51,5 @@ try {
 // can't be reached from outside the container, so Kubernetes and Traefik would never reach us.
 await app.listen({ port: config.PORT, host: "0.0.0.0" });
 metricsServer = startMetricsServer(config.METRICS_PORT, metrics);
+databaseProbe = startDatabaseProbe(sql, metrics, app.log);
 app.log.info({ metrics_port: metricsServer.port }, "metrics server listening");

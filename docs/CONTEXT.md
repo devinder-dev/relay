@@ -45,7 +45,8 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
 - The kubeconfig is an admin password. It stays on the server in `~/.kube/config`.
 - Ask the other person before any destructive command on the VPS, the database or DNS.
 - Never expose to the internet: Postgres (5432), the Kubernetes API (6443), Grafana (SSH tunnel
-  only). `/metrics` uses port 9090 behind ClusterIP Services only; no Ingress points to it.
+  only). `/metrics` uses port 9090 for the API and 9091 for the worker behind ClusterIP Services
+  only; no Ingress points to either.
 - Endpoint URLs from customers must not point to internal, private or our own VPS addresses
   (SSRF). Checked when an endpoint is created **and** before every delivery attempt; redirects
   are never followed. **Known gap, closed in Phase 4: DNS rebinding.** A name can resolve to a
@@ -86,8 +87,8 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `GET /v1/endpoints` · `DELETE /v1/endpoints/:id` (soft delete) · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
 `GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
-`/metrics` is an internal-only Prometheus endpoint on port 9090 (no Ingress), exposing bounded
-HTTP and worker metrics. Errors: `{"error":{"code","message","request_id"}}`. Another
+`/metrics` is an internal-only Prometheus endpoint on port 9090 (API) or 9091 (worker), exposing
+bounded HTTP and worker metrics. Errors: `{"error":{"code","message","request_id"}}`. Another
 owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
 Owners and API keys are created with a `create-owner` script (no signup page).
 **The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
@@ -217,7 +218,7 @@ Grafana. The chart provisions only a Prometheus datasource, so a Loki one was ad
 labelled ConfigMap that Grafana's sidecar picks up and reloads - no chart upgrade, which also
 avoids rolling Prometheus to add one datasource.
 The Helm values, scrape configuration, dashboard, alert rules and reasoning are recorded in
-`k8s/monitoring/` (#44). API and worker metrics use internal-only port 9090 and bounded labels;
+`k8s/monitoring/` (#44). API and worker metrics use internal-only ports 9090 and 9091 and bounded labels;
 Prometheus evaluates API, worker and backup rules. Grafana remains ClusterIP, SSH tunnel only.
 Alertmanager deliberately remains disabled until an owned notification receiver is approved.
 

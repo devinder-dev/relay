@@ -42,6 +42,10 @@ spec:
           ports:
             - name: health
               containerPort: 9090
+            # Kept apart from health so the platform NetworkPolicy can permit only Prometheus
+            # to read metrics without interfering with kubelet probes.
+            - name: metrics
+              containerPort: 9091
           env:
             - name: DATABASE_URL
               valueFrom:

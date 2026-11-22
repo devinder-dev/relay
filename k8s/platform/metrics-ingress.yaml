@@ -1,0 +1,52 @@
+# Metrics are operational data, not a public API. The application deployer cannot apply this
+# platform policy, so a merged application change cannot widen access to its own metrics.
+#
+# Kubernetes NetworkPolicy is additive. We allow the existing customer/probe ports from all
+# cluster sources because Traefik and kubelet probes do not have stable pod identities here, while
+# allowing metrics only from the monitoring namespace. The Services remain ClusterIP-only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-api-metrics-ingress
+  namespace: relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: relay-api
+  policyTypes: ["Ingress"]
+  ingress:
+    # Preserve Traefik traffic and Kubernetes probes on the existing HTTP port.
+    - ports:
+        - protocol: TCP
+          port: 8080
+    # The metrics port has no Ingress and is readable only by monitoring workloads.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: relay-worker-metrics-ingress
+  namespace: relay
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: relay-worker
+  policyTypes: ["Ingress"]
+  ingress:
+    # Kubelet liveness/startup probes use this port. It is not exposed by a Service.
+    - ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9091

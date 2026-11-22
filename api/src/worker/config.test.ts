@@ -11,6 +11,7 @@ test("worker defaults and explicit overrides", () => {
   expect(config.DB_POOL_MAX).toBe(3);
   expect(config.RETRY_JITTER).toBe(0.2);
   expect(config.HEALTH_PORT).toBe(9090);
+  expect(config.METRICS_PORT).toBe(9091);
   expect(loadWorkerConfig({ DATABASE_URL, RETRY_SCHEDULE: "1s,24h", RETRY_JITTER: "0" }).maxTries).toBe(3);
 });
 for (const raw of ["0s", "25h", "5x", "", "1s,", " 5s", "1e2s", "9".repeat(400) + "h", Array(21).fill("1s").join(",")]) {
