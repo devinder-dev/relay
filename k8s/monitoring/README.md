@@ -182,7 +182,24 @@ kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
 ```
 
 The admin password is **not** in these values. The chart generated it into a Secret, so there is
-no credential in this folder and nothing to redact. Read it on the server if needed.
+no credential in this folder and nothing to redact. Log in as `admin`, with the password read on
+the server:
+
+```sh
+kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d; echo
+```
+
+Grafana copies that password into its own database only on its first start. A change made later
+inside Grafana stays in that database, and the Secret goes stale: on 23 Nov neither the password
+we had saved nor the Secret's worked (Grafana's log said `invalid password` for `admin`). This
+sets Grafana back to the Secret's value, through stdin so the password is never a command
+argument:
+
+```sh
+kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d \
+  | kubectl -n monitoring exec -i deploy/monitoring-grafana -c grafana -- \
+      grafana cli admin reset-admin-password --password-from-stdin
+```
 
 ## What this does and does not give us
 
