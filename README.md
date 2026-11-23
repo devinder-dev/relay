@@ -13,7 +13,7 @@ This is our exam project for Chas Academy's *Avancerad fullstackutveckling, test
 | Service | Address | What is there |
 |---|---|---|
 | API | https://api.myrelay.tech | Core API. [`/version`](https://api.myrelay.tech/version) shows the running commit |
-| Relay dashboard (static files on cdn) | https://cdn.myrelay.tech | Connect, delivery log, delivery detail and endpoints screens, reading and writing the real API. Paste an API key to see that owner's deliveries |
+| Relay dashboard (static files) | https://cdn.myrelay.tech; https://myrelay.tech | The same Connect, delivery log, delivery detail and endpoints screens, reading and writing the real API. The DNS A record `@` already points to `81.88.23.71`; `https://myrelay.tech` is served after this PR is merged and deployed. |
 | Ops dashboard (Grafana: metrics and logs) | No public address: reachable only over an SSH tunnel | Grafana, Prometheus, Loki and Alloy run in namespace `monitoring`. Its Service is ClusterIP with no Ingress, so nothing is published on `grafana.myrelay.tech`. Reach it with `ssh -L 3000:localhost:3000 relay`, then on the server `kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80`, and open `http://localhost:3000` |
 | Source | [devinder-dev/relay](https://github.com/devinder-dev/relay) | This repository |
 

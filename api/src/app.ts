@@ -11,7 +11,7 @@ import { errorHandler, notFoundHandler } from "./error-handler.ts";
 import { healthRoutes } from "./routes/health.ts";
 import { Metrics } from "./metrics.ts";
 
-const DASHBOARD_ORIGINS = ["https://cdn.myrelay.tech", "http://localhost:4173"];
+const DASHBOARD_ORIGINS = ["https://cdn.myrelay.tech", "https://myrelay.tech", "http://localhost:4173"];
 
 export function buildApp(
   config: Config,

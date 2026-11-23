@@ -16,7 +16,7 @@ that changes this file, approved by both of us, before or together with the code
 | Times | ISO 8601 in UTC, e.g. `2026-10-25T14:03:21.512Z` |
 | Request id | Every response has an `X-Request-Id` header, the same id as in our logs and in error bodies |
 | Other owners' data | Answered with **404**, never 403, so nobody can probe which ids exist |
-| CORS | Browsers may call the API only from `https://cdn.myrelay.tech`, and from `http://localhost:4173` (the preview server Playwright uses in CI). Local development uses a proxy instead, see "Local development" below |
+| CORS | Browsers may call the API only from `https://cdn.myrelay.tech`, `https://myrelay.tech`, and `http://localhost:4173` (the preview server Playwright uses in CI). Local development uses a proxy instead, see "Local development" below |
 
 ### Errors
 
