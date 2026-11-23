@@ -10,7 +10,7 @@
 #
 # 7 days and 10Gi: a week of history covers the exam period and any incident we would still be
 # looking into. One node produces few series, so 7 days fits well inside the 10Gi PVC. `retentionSize`
-# is deliberately 8Gi, leaving room for WAL and compaction before the local-path volume fills.
+# is deliberately 8GB, leaving room for WAL and compaction before the local-path volume fills.
 #
 # Alertmanager off: there is no receiver - no email, Slack or pager - and nobody on call, so alerts
 # would go nowhere and still cost memory. We check by hand, the same honest line the backup runbook
@@ -57,7 +57,9 @@ prometheus:
     retention: 7d
     # Keep a 2Gi safety margin in the 10Gi PVC. On local-path, exhausting this filesystem can
     # stop Prometheus before time retention gets a chance to compact old blocks.
-    retentionSize: 8Gi
+    # Prometheus' own units end in B and count in powers of 2, so 8GB is 8 GiB. Kubernetes'
+    # "8Gi" is refused by the Prometheus resource's schema (the 23 Nov upgrade failed on it).
+    retentionSize: 8GB
     storageSpec:
       volumeClaimTemplate:
         spec:
