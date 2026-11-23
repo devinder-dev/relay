@@ -21,7 +21,7 @@ ARG GIT_SHA=dev
 ENV GIT_SHA=$GIT_SHA
 
 USER bun
-EXPOSE 8080 
+EXPOSE 8080 9090 9091
 
 # Exec form: Bun itself is the main process, so it receives SIGTERM directly.
 CMD ["bun", "src/server.ts"]

@@ -48,6 +48,31 @@ jobs:
       - name: Unit and integration tests (logged in as relay)
         run: bun run test:db
 
+  monitoring-rules:
+    name: monitoring-rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # promtool is a release binary rather than an unpinned package-manager dependency. Verify
+      # the exact archive before extracting it so the rule parser and tests are reproducible.
+      - name: Validate Prometheus rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROMETHEUS_VERSION=3.5.0
+          PROMETHEUS_SHA256=e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+          archive=/tmp/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz
+          curl --fail --location --retry 3 --silent --show-error --max-time 60 \
+            --output "$archive" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          printf '%s  %s\n' "$PROMETHEUS_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C /tmp
+          PROMTOOL="/tmp/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
+            bash scripts/test-prometheus-rules.sh
+
   image:
     name: api-image
     needs: test
@@ -275,7 +300,7 @@ jobs:
     name: deploy
     # Every image this commit's manifests ask for must be on the shelf before the
     # server is told to pull them, so deploy waits for both image jobs.
-    needs: [image, dashboard-image, deploy-script] # a broken deploy script never reaches the server
+    needs: [image, dashboard-image, deploy-script, monitoring-rules] # a broken check never reaches the server
     if: github.event_name == 'push' # only after a merge to main, never on a PR
     runs-on: ubuntu-24.04
     # The environment hands over DEPLOY_SSH_KEY, and only to workflows running on main.

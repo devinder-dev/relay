@@ -1,4 +1,4 @@
-# Metrics and logs (Phase 7)
+# Metrics, logs and alerts (Phase 7)
 
 Prometheus, Grafana, Loki and Alloy, in namespace `monitoring`. Installed with Helm on
 3 November 2026 and **running in production since then** - but until this folder existed they
@@ -42,6 +42,83 @@ answered the sidecar's reload with `200 OK {"message":"Datasources config reload
 
 ```sh
 ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-loki-datasource.yaml
+```
+
+## Relay application metrics and alert rules
+
+The API exposes a Prometheus-format `/metrics` endpoint on port 9090 and the worker on port 9091.
+Neither has an Ingress and both are reachable only through ClusterIP Services. The platform
+NetworkPolicy permits those ports only from namespace `monitoring`; worker health remains on 9090
+for kubelet probes. The metric labels are deliberately bounded:
+HTTP method, route template and response status, plus a small delivery outcome set. They never
+contain customer URLs, ids, API keys, request ids or payload values.
+
+`relay-servicemonitors.yaml` creates exactly two 30-second scrape targets: the API and worker.
+`relay-alert-rules.yaml` adds availability (including missing series and scrape targets), sustained
+API 5xx/latency, database-query, worker-loop-error, node resource/restart and backup rules.
+Prometheus evaluates them and Grafana displays their state. They do
+**not** notify anyone yet: Alertmanager remains disabled until an approved notification receiver
+and its Secret are supplied. This is safer than pretending an unowned email or webhook is an
+incident channel.
+
+[`alertmanager-config.example.yaml`](alertmanager-config.example.yaml) is a deliberately inert
+template for a future approved webhook. It selects a URL from a Secret in `monitoring`, but no
+Secret, destination, or Alertmanager enablement is included here. Evaluated alert rules therefore
+remain distinct from delivered notifications.
+
+`grafana-relay-dashboard.yaml` is a compact dashboard provisioned through Grafana's dashboard
+sidecar. It uses the existing Prometheus datasource (`uid: prometheus`); Loki remains the place to
+inspect individual delivery logs.
+
+Apply the platform NetworkPolicy first, then deploy the application commit that exposes its metrics
+ports, and finally apply the ServiceMonitors, rules, and dashboard as an administrator. The CI
+deployer intentionally has no custom-resource permissions:
+
+```sh
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/platform/metrics-ingress.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/platform/metrics-ingress.yaml
+# Deploy the application commit through the normal relay-deploy path here.
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply --dry-run=server -f -' < k8s/monitoring/relay-alert-rules.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/relay-alert-rules.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config apply -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
+```
+
+After the application commit is deployed, verify targets and rules rather than assuming the
+selectors or chart defaults match:
+
+```sh
+kubectl -n relay get servicemonitor
+kubectl -n monitoring get prometheusrule relay
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090
+# In another terminal: curl -fsS http://127.0.0.1:9090/api/v1/targets | jq '.data.activeTargets[] | select(.labels.namespace == "relay") | {labels,health}'
+```
+
+Before review, validate alert transitions locally with Prometheus's own parser. `PrometheusRule`
+has a Kubernetes wrapper, so use the repository helper rather than passing it directly to
+`promtool`:
+
+```sh
+PROMTOOL=/path/to/promtool bash scripts/test-prometheus-rules.sh
+```
+
+Rollback is reversible and does not affect API traffic: first roll back the application commit
+through the normal `relay-deploy` path while `metrics-ingress.yaml` still protects the old metrics
+ports. Then an administrator deletes the dashboard ConfigMap, ServiceMonitors, PrometheusRule and
+the now-unused worker metrics Service. Delete `metrics-ingress.yaml` last. The deployer deliberately
+cannot delete that Service. Do not delete existing Helm releases, Prometheus PVC or Loki PVC as
+part of an alert rollback.
+
+```sh
+# Roll back the application commit through relay-deploy first.
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/grafana-relay-dashboard.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-servicemonitors.yaml
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/monitoring/relay-alert-rules.yaml
+# After the application rollback, only when the Service is no longer in its manifests:
+ssh relay 'kubectl --kubeconfig ~/.kube/config -n relay delete service relay-worker-metrics'
+# Keep metrics restricted until the old ports and Service have gone.
+ssh relay 'kubectl --kubeconfig ~/.kube/config delete -f -' < k8s/platform/metrics-ingress.yaml
 ```
 
 ## Its own namespace, and what it costs the node
@@ -119,10 +196,13 @@ no credential in this folder and nothing to redact. Read it on the server if nee
   8 Nov. On a rebuild, apply it after the Helm releases.
 - **Infrastructure metrics: working.** Prometheus scrapes the nodes, the kubelet, CoreDNS, the
   API server and kube-state-metrics.
-- **Application metrics: none.** Relay exposes no `/metrics` endpoint and no ServiceMonitor
-  targets our pods, so nothing is collected about events, deliveries or retries. That is the
-  remaining gap in G6, and `docs/CONTEXT.md` records it.
-- **No alerting.** Alertmanager is disabled.
+- **Application metrics: collected.** The API reports request count, latency and an independent
+  30-second `SELECT 1` database check; workers report
+  finalized delivery outcomes, attempt duration and loop errors. Two ServiceMonitors scrape only
+  their internal API port 9090 and worker port 9091 endpoints.
+- **Alert rules: evaluated, not delivered.** Prometheus evaluates the conservative rules in this
+  folder and Grafana shows their state. Alertmanager is intentionally disabled until an owned
+  notification receiver is configured.
 - **No backup.** Loki's and Prometheus's volumes are not backed up. Losing the node loses the
   history.
 

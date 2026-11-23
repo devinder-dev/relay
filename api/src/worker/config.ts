@@ -41,6 +41,9 @@ const Env = z.object({
   }),
   RETRY_JITTER: z.string().min(1).transform(Number).pipe(z.number().min(0).max(0.5)).default(0.2),
   HEALTH_PORT: integer(9090, 65535),
+  // Kept separate from health so NetworkPolicy can expose metrics only to Prometheus without
+  // blocking the kubelet's health probe on HEALTH_PORT.
+  METRICS_PORT: integer(9091, 65535),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   GIT_SHA: z.string().default("dev"),
 });

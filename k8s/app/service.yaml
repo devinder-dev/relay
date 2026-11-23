@@ -5,6 +5,8 @@ kind: Service
 metadata:
   name: relay-api
   namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-api
 spec:
   selector:
     app.kubernetes.io/name: relay-api   # the label the Deployment gives its pods
@@ -12,4 +14,24 @@ spec:
     - name: http
       port: 80            # the Service listens on 80...
       targetPort: http    # ...and forwards to the pods' port named "http" (8080)
-  # The metrics port (9090) is added in Phase 7, when /metrics exists.
+    # Deliberately not routed by the Ingress. Only Prometheus has a cluster-local path to it.
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+---
+# The worker has no customer-facing Service. This ClusterIP exists solely so Prometheus can
+# scrape its /metrics endpoint; it creates no public route or NodePort.
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay-worker-metrics
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-worker
+spec:
+  selector:
+    app.kubernetes.io/name: relay-worker
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics

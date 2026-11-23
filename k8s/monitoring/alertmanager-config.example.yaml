@@ -1,0 +1,27 @@
+# TEMPLATE ONLY: do not apply this file until an owner has approved a destination and Alertmanager
+# has been enabled. The URL belongs in a Kubernetes Secret, never in this repository or Helm values.
+#
+# Create the secret on the server after approval:
+# kubectl -n monitoring create secret generic relay-alertmanager-webhook \
+#   --from-literal=url='https://approved.example.invalid/relay-alerts'
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: relay-notifications
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  route:
+    receiver: approved-webhook
+    groupBy: [alertname, namespace]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+  receivers:
+    - name: approved-webhook
+      webhookConfigs:
+        - urlSecret:
+            name: relay-alertmanager-webhook
+            key: url
+          sendResolved: true

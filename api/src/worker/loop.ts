@@ -46,10 +46,12 @@ export async function runLoop(deps: LoopDeps): Promise<void> {
           if (result.status === "rejected") deps.log("error", "❌ delivery attempt failed to finish", {
             delivery_id: rows[index]!.id, lease_id: rows[index]!.lease_id, code: errorCode(result.reason),
           });
+          if (result.status === "rejected") deps.metrics?.recordWorkerLoopError();
         });
       }
     } catch (error) {
       deps.log("warn", "⚠️ queue unavailable, retrying", { code: errorCode(error) });
+      deps.metrics?.recordWorkerLoopError();
       await sleep(Math.min(5000, 1000 * 2 ** Math.min(errors++, 3)), deps.stop.signal);
     }
     deps.heartbeat.last = clock.monotonic();

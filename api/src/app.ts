@@ -9,14 +9,17 @@ import { v1Routes } from "./routes/v1.ts";
 import type { Config } from "./config.ts";
 import { errorHandler, notFoundHandler } from "./error-handler.ts";
 import { healthRoutes } from "./routes/health.ts";
+import { Metrics } from "./metrics.ts";
 
 const DASHBOARD_ORIGINS = ["https://cdn.myrelay.tech", "http://localhost:4173"];
 
 export function buildApp(
   config: Config,
   deps: { sql: Sql; lookup?: Lookup },
-  options: { logger?: boolean; logStream?: { write(line: string): void } } = {},
+  options: { logger?: boolean; logStream?: { write(line: string): void }; metrics?: Metrics } = {},
 ): FastifyInstance {
+  const metrics = options.metrics ?? new Metrics();
+  const started = new WeakMap<object, number>();
   const app = Fastify({
     // JSON logs (pino). Tests pass logger: false to keep their output clean.
     logger: options.logger === false ? false : { level: config.LOG_LEVEL, stream: options.logStream },
@@ -37,7 +40,17 @@ export function buildApp(
   // Every response tells the client its request id: the same id as in our logs,
   // so "it failed" plus the id is enough to find the exact log lines.
   app.addHook("onRequest", async (request, reply) => {
+    started.set(request, performance.now());
     reply.header("x-request-id", request.id);
+  });
+
+  // Use the route template, never the raw URL, so a UUID or customer-controlled query cannot
+  // create a new Prometheus series. Health probes are intentionally excluded from SLO signals.
+  app.addHook("onResponse", async (request, reply) => {
+    const route = request.routeOptions.url ?? "unmatched";
+    if (route.startsWith("/health/") || route === "/version") return;
+    const startedAt = started.get(request);
+    if (startedAt !== undefined) metrics.observeHttp(request.method, route, reply.statusCode, (performance.now() - startedAt) / 1000);
   });
 
   // Set before the routes are registered, so every route uses them.

@@ -45,7 +45,8 @@ Chas Academy's "Avancerad fullstackutveckling, test och DevOps".
 - The kubeconfig is an admin password. It stays on the server in `~/.kube/config`.
 - Ask the other person before any destructive command on the VPS, the database or DNS.
 - Never expose to the internet: Postgres (5432), the Kubernetes API (6443), Grafana (SSH tunnel
-  only). `/metrics` is not built yet; if it is, it gets its own port that no Ingress points to.
+  only). `/metrics` uses port 9090 for the API and 9091 for the worker behind ClusterIP Services
+  only; no Ingress points to either.
 - Endpoint URLs from customers must not point to internal, private or our own VPS addresses
   (SSRF). Checked when an endpoint is created **and** before every delivery attempt; redirects
   are never followed. **Known gap, closed in Phase 4: DNS rebinding.** A name can resolve to a
@@ -86,7 +87,8 @@ endpoint_id); partial INDEX (next_attempt_at) WHERE status = 'pending') · `atte
 `GET /v1/endpoints` · `DELETE /v1/endpoints/:id` (soft delete) · `POST /v1/events` · `GET /v1/deliveries?status=&endpoint_id=&cursor=` ·
 `GET /v1/deliveries/:id` · `POST /v1/deliveries/:id/replay` · `GET /health/live` (no DB check) ·
 `GET /health/ready` (never checks the DB; 503 while shutting down) · `GET /version` (git SHA) ·
-`/metrics` is **not implemented** (it was planned for port 9090 only, which no Ingress would point to). Errors: `{"error":{"code","message","request_id"}}`. Another
+`/metrics` is an internal-only Prometheus endpoint on port 9090 (API) or 9091 (worker), exposing
+bounded HTTP and worker metrics. Errors: `{"error":{"code","message","request_id"}}`. Another
 owner's id answers 404. Bodies: JSON only, max 256 KiB. CORS: `https://cdn.myrelay.tech`, and `http://localhost:4173` (Playwright's preview server), as in `docs/api.md`.
 Owners and API keys are created with a `create-owner` script (no signup page).
 **The full contract, with every request and response shape, is in [`docs/api.md`](api.md).**
@@ -209,15 +211,16 @@ was applied and checked before activation, including the isolated address-exclus
 checks showed valid signatures on 500, 500, 200 → delivered with three attempts; a failing delivery
 became dead after five tries, replay returned 202 with attempts reset to zero, and it tried again.
 
-Phase 7 (metrics and logs) is partly live, ahead of its place in the plan: kube-prometheus-stack,
+Phase 7 (metrics, logs and alert evaluation) is live, ahead of its place in the plan: kube-prometheus-stack,
 Loki and Alloy were installed with Helm into namespace `monitoring` on 3 Nov and are running.
 Logs from namespace `relay`, the worker's included, are centralised in Loki and searchable in
 Grafana. The chart provisions only a Prometheus datasource, so a Loki one was added on 8 Nov as a
 labelled ConfigMap that Grafana's sidecar picks up and reloads - no chart upgrade, which also
 avoids rolling Prometheus to add one datasource.
-The Helm values, and the reason behind each setting, are recorded in `k8s/monitoring/` (#44).
-Still missing: application metrics (no `/metrics` endpoint) and a published address (Grafana
-is ClusterIP, SSH tunnel only).
+The Helm values, scrape configuration, dashboard, alert rules and reasoning are recorded in
+`k8s/monitoring/` (#44). API and worker metrics use internal-only ports 9090 and 9091 and bounded labels;
+Prometheus evaluates API, worker and backup rules. Grafana remains ClusterIP, SSH tunnel only.
+Alertmanager deliberately remains disabled until an owned notification receiver is approved.
 
 Phase 6 (backups) is done: restore-tested on 7 Nov, and the schedule ran on its own on 8 Nov at
 03:00 and succeeded.
@@ -227,7 +230,8 @@ single `put-object`, never `aws s3 cp`, because the key may not do multipart. Pr
 drill: the recorded version downloaded by VersionId with its checksum checked, restored as `relay`
 in 1.46 s, every count and id identical to production, and a wrong-password run uploaded nothing.
 The drill also found that the restore pipeline must run in bash, not zsh, whose MULTIOS option
-would mix the CLI's JSON into the dump. Still missing: an alert when a night fails or is skipped.
+would mix the CLI's JSON into the dump. Prometheus now evaluates failed and overdue-backup rules;
+notification delivery still needs an approved receiver.
 
 Phase 8 (VG under load) is done (7 Nov): an autoscaler holds the API between 2 and 4 pods
 (#45). Under 80 k6 users it went from 2 to 4 pods in 66 s and back to 2 in 6 m 07 s, with

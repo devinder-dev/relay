@@ -1,0 +1,448 @@
+# Run with: PROMTOOL=/path/to/promtool bash scripts/test-prometheus-rules.sh
+# These are intentionally unit tests for the failure semantics that chart rendering cannot cover:
+# replica, scrape, database, VPS capacity, and backup failure/recovery signals.
+rule_files:
+  - ../relay-alert-rules.yaml
+evaluation_interval: 1m
+tests:
+  - name: api_replicas_below_two_warns_but_one_is_not_critical
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="relay",deployment="relay-api"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayApiReplicaDegraded
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiReplicaDegraded
+              deployment: relay-api
+              namespace: relay
+              severity: warning
+            exp_annotations:
+              summary: Relay API has fewer than two available pods
+              description: The API has lost the two-pod floor required for rollout safety and process redundancy.
+      - eval_time: 10m
+        alertname: RelayApiUnavailable
+        exp_alerts: []
+  - name: api_zero_replicas_is_critical
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="relay",deployment="relay-api"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayApiUnavailable
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiUnavailable
+              deployment: relay-api
+              namespace: relay
+              severity: critical
+            exp_annotations:
+              summary: Relay API has no available pod
+              description: The API deployment has had zero available replicas for five minutes.
+  - name: missing_api_replica_metric_is_visible
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="unrelated",endpoint="metrics"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayApiReplicaMetricMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiReplicaMetricMissing
+              deployment: relay-api
+              namespace: relay
+              severity: warning
+            exp_annotations:
+              summary: Relay API replica metric is missing
+              description: kube-state-metrics no longer reports relay-api availability, so replica alerts cannot be trusted.
+  - name: one_of_two_api_scrape_targets_down_warns_without_global_page
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-1"}'
+        values: '0+0x20'
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-2"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayApiMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiMetricsTargetDown
+              endpoint: metrics
+              instance: api-1
+              namespace: relay
+              service: relay-api
+              severity: warning
+            exp_annotations:
+              summary: Relay API metrics target is down
+              description: A discovered Relay API metrics target has failed to scrape for five minutes.
+      - eval_time: 5m
+        alertname: RelayApiMetricsAllTargetsDown
+        exp_alerts: []
+  - name: all_api_scrape_targets_down_escalates
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-1"}'
+        values: '0+0x20'
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-2"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayApiMetricsTargetDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RelayApiMetricsAllTargetsDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiMetricsAllTargetsDown
+              severity: critical
+            exp_annotations:
+              summary: All Relay API metrics targets are down
+              description: Every discovered Relay API metrics target has failed to scrape for five minutes.
+  - name: api_scrape_target_recovers
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-1"}'
+        values: '0+0x6 1+0x20'
+      - series: 'up{namespace="relay",service="relay-api",endpoint="metrics",instance="api-2"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayApiMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiMetricsTargetDown
+              endpoint: metrics
+              instance: api-1
+              namespace: relay
+              service: relay-api
+              severity: warning
+            exp_annotations:
+              summary: Relay API metrics target is down
+              description: A discovered Relay API metrics target has failed to scrape for five minutes.
+      - eval_time: 12m
+        alertname: RelayApiMetricsTargetDown
+        exp_alerts: []
+  - name: missing_scrape_target_is_visible
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="unrelated",endpoint="metrics"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayApiMetricsTargetMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayApiMetricsTargetMissing
+              endpoint: metrics
+              namespace: relay
+              service: relay-api
+              severity: warning
+            exp_annotations:
+              summary: Relay API metrics target is missing
+              description: Prometheus discovered no Relay API metrics target; check the Service and ServiceMonitor selectors.
+  - name: one_of_two_worker_scrape_targets_down_warns_without_global_page
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-1"}'
+        values: '0+0x20'
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-2"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayWorkerMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayWorkerMetricsTargetDown
+              endpoint: metrics
+              instance: worker-1
+              namespace: relay
+              service: relay-worker-metrics
+              severity: warning
+            exp_annotations:
+              summary: Relay worker metrics target is down
+              description: A discovered Relay worker metrics target has failed to scrape for five minutes.
+      - eval_time: 5m
+        alertname: RelayWorkerMetricsAllTargetsDown
+        exp_alerts: []
+  - name: all_worker_scrape_targets_down_escalates
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-1"}'
+        values: '0+0x20'
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-2"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayWorkerMetricsTargetDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RelayWorkerMetricsAllTargetsDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayWorkerMetricsAllTargetsDown
+              severity: critical
+            exp_annotations:
+              summary: All Relay worker metrics targets are down
+              description: Every discovered Relay worker metrics target has failed to scrape for five minutes.
+  - name: worker_scrape_target_recovers
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-1"}'
+        values: '0+0x6 1+0x20'
+      - series: 'up{namespace="relay",service="relay-worker-metrics",endpoint="metrics",instance="worker-2"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RelayWorkerMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayWorkerMetricsTargetDown
+              endpoint: metrics
+              instance: worker-1
+              namespace: relay
+              service: relay-worker-metrics
+              severity: warning
+            exp_annotations:
+              summary: Relay worker metrics target is down
+              description: A discovered Relay worker metrics target has failed to scrape for five minutes.
+      - eval_time: 12m
+        alertname: RelayWorkerMetricsTargetDown
+        exp_alerts: []
+  - name: missing_worker_scrape_target_is_visible
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="relay",service="unrelated",endpoint="metrics"}'
+        values: '1+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RelayWorkerMetricsTargetMissing
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayWorkerMetricsTargetMissing
+              endpoint: metrics
+              namespace: relay
+              service: relay-worker-metrics
+              severity: warning
+            exp_annotations:
+              summary: Relay worker metrics target is missing
+              description: Prometheus discovered no Relay worker metrics target; check the Service and ServiceMonitor selectors.
+  - name: database_probe_failure_and_recovery_are_visible
+    interval: 1m
+    input_series:
+      - series: 'relay_database_query_success{instance="api-1"}'
+        values: '0+0x4 1+0x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: RelayDatabaseQueryFailing
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayDatabaseQueryFailing
+              severity: critical
+            exp_annotations:
+              summary: Relay cannot complete its periodic database query
+              description: No API pod has completed the independent SELECT 1 database check for two minutes.
+      - eval_time: 8m
+        alertname: RelayDatabaseQueryFailing
+        exp_alerts: []
+  - name: cpu_usage_alerts_only_when_sustained
+    interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="vps",mode="idle"}'
+        values: '0+0x20 60+60x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RelayNodeCpuHigh
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayNodeCpuHigh
+              instance: vps
+              severity: warning
+            exp_annotations:
+              summary: Relay node CPU usage exceeds 85 percent
+              description: The single VPS has sustained CPU pressure; API latency and worker delivery can degrade.
+      - eval_time: 21m
+        alertname: RelayNodeCpuHigh
+        exp_alerts: []
+  - name: cpu_usage_healthy_does_not_alert
+    interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="vps",mode="idle"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RelayNodeCpuHigh
+        exp_alerts: []
+  - name: memory_usage_alerts_only_when_sustained
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="vps"}'
+        values: '100+0x20 200+0x20'
+      - series: 'node_memory_MemTotal_bytes{instance="vps"}'
+        values: '1000+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RelayNodeMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayNodeMemoryHigh
+              instance: vps
+              severity: warning
+            exp_annotations:
+              summary: Relay node memory usage exceeds 85 percent
+              description: The single VPS has sustained memory pressure and risks OOM eviction or restart.
+      - eval_time: 21m
+        alertname: RelayNodeMemoryHigh
+        exp_alerts: []
+  - name: memory_usage_healthy_does_not_alert
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="vps"}'
+        values: '200+0x20'
+      - series: 'node_memory_MemTotal_bytes{instance="vps"}'
+        values: '1000+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RelayNodeMemoryHigh
+        exp_alerts: []
+  - name: disk_usage_alerts_only_when_sustained
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{instance="vps",mountpoint="/",fstype="ext4"}'
+        values: '90+0x20 200+0x20'
+      - series: 'node_filesystem_size_bytes{instance="vps",mountpoint="/",fstype="ext4"}'
+        values: '1000+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RelayNodeDiskHigh
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayNodeDiskHigh
+              fstype: ext4
+              instance: vps
+              mountpoint: /
+              severity: warning
+            exp_annotations:
+              summary: Relay node disk usage exceeds 90 percent
+              description: The VPS root filesystem is almost full; local-path database, Prometheus and Loki data are at risk.
+      - eval_time: 21m
+        alertname: RelayNodeDiskHigh
+        exp_alerts: []
+  - name: disk_usage_healthy_does_not_alert
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{instance="vps",mountpoint="/",fstype="ext4"}'
+        values: '200+0x20'
+      - series: 'node_filesystem_size_bytes{instance="vps",mountpoint="/",fstype="ext4"}'
+        values: '1000+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RelayNodeDiskHigh
+        exp_alerts: []
+  - name: repeated_container_restarts_alert_and_recover
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="relay",pod="relay-api-1",container="api"}'
+        values: '0+1x15 15+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RelayContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayContainerRestarting
+              container: api
+              namespace: relay
+              pod: relay-api-1
+              severity: warning
+            exp_annotations:
+              summary: Relay container is repeatedly restarting
+              description: A Relay namespace container restarted more than three times in 15 minutes.
+      - eval_time: 35m
+        alertname: RelayContainerRestarting
+        exp_alerts: []
+  - name: a_current_failed_backup_alerts
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"}'
+        values: '0+0x30'
+      - series: 'kube_job_created{namespace="relay",job_name="relay-backup-1"}'
+        values: '100+0x30'
+      - series: 'kube_job_status_failed{namespace="relay",job_name="relay-backup-1"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RelayBackupJobFailed
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayBackupJobFailed
+              severity: critical
+            exp_annotations:
+              summary: Relay database backup job failed
+              description: A relay-backup Job failed after the last successful backup; inspect its pod logs before the next backup window.
+  - name: a_recent_successful_backup_has_no_backup_alert
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"}'
+        values: '3600+0x30'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: RelayBackupJobFailed
+        exp_alerts: []
+      - eval_time: 1h
+        alertname: RelayBackupOverdue
+        exp_alerts: []
+  - name: a_successful_backup_resolves_an_older_failed_job
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"}'
+        values: '200+0x30'
+      - series: 'kube_job_created{namespace="relay",job_name="relay-backup-old"}'
+        values: '100+0x30'
+      - series: 'kube_job_status_failed{namespace="relay",job_name="relay-backup-old"}'
+        values: '1+0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RelayBackupJobFailed
+        exp_alerts: []
+  - name: backup_overdue_alerts_after_27_hours_since_a_success
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{namespace="relay",cronjob="relay-backup"}'
+        values: '100+0x1700'
+    alert_rule_test:
+      - eval_time: 28h
+        alertname: RelayBackupOverdue
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayBackupOverdue
+              cronjob: relay-backup
+              namespace: relay
+              severity: critical
+            exp_annotations:
+              summary: Relay database backup is overdue
+              description: relay-backup has not recorded a successful run for 27 hours.
+  - name: failed_first_backup_alerts_after_bootstrap_grace_without_success_metric
+    interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="relay",cronjob="relay-backup"}'
+        values: '0+0x1700'
+      - series: 'kube_job_created{namespace="relay",job_name="relay-backup-1"}'
+        values: '100+0x1700'
+      - series: 'kube_job_status_failed{namespace="relay",job_name="relay-backup-1"}'
+        values: '1+0x1700'
+    alert_rule_test:
+      - eval_time: 28h
+        alertname: RelayBackupOverdue
+        exp_alerts:
+          - exp_labels:
+              alertname: RelayBackupOverdue
+              cronjob: relay-backup
+              namespace: relay
+              severity: critical
+            exp_annotations:
+              summary: Relay database backup is overdue
+              description: relay-backup has not recorded a successful run for 27 hours.

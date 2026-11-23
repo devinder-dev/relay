@@ -1,0 +1,41 @@
+# ServiceMonitor objects are applied by an administrator, not the application deployer. The
+# deployer has no CRD permissions, and a merged application PR must not be able to broaden its
+# own scrape scope. Both selectors are exact and Services are ClusterIP-only by policy.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: relay-api
+  namespace: relay
+  labels:
+    # kube-prometheus-stack's default ServiceMonitor selector requires its Helm release label.
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: relay-api
+  namespaceSelector:
+    matchNames: [relay]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: relay-worker
+  namespace: relay
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: relay-worker
+  namespaceSelector:
+    matchNames: [relay]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

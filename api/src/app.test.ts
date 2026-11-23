@@ -3,12 +3,15 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { buildApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { createDb } from "./db.ts";
+import { Metrics } from "./metrics.ts";
 
 // A config made from a fixed object, so the test never depends on this machine's environment.
 // DATABASE_URL is required but harmless here: these tests never connect to it.
 const sql = createDb(loadConfig({ DATABASE_URL: "postgres://relay:x@127.0.0.1:1/relay" }));
+const metrics = new Metrics();
 const app = buildApp(loadConfig({ GIT_SHA: "abc123", DATABASE_URL: "postgres://test@localhost/test" }), { sql }, {
   logger: false,
+  metrics,
 });
 afterAll(async () => {
   await app.close();
@@ -37,5 +40,13 @@ describe("health routes", () => {
   test("every response carries an x-request-id", async () => {
     const res = await app.inject({ method: "GET", url: "/health/live" });
     expect(res.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test("records route templates but excludes probe traffic", async () => {
+    await app.inject({ method: "GET", url: "/does-not-exist?customer=value" });
+    const output = metrics.render();
+    expect(output).toContain('route="unmatched"');
+    expect(output).not.toContain('route="/health/live"');
+    expect(output).not.toContain("customer=value");
   });
 });

@@ -33,6 +33,11 @@ const Env = z.object({
     .refine((n) => Number.isInteger(n), { message: "must be a whole number" })
     .refine((n) => n >= 1 && n <= 65535, { message: "must be a whole number between 1 and 65535" })
     .default(8080),
+
+  // Prometheus is reached only through a ClusterIP Service; no Ingress points at this port.
+  METRICS_PORT: z.string().transform((s) => Number(s))
+    .refine((n) => Number.isInteger(n) && n >= 1 && n <= 65535, { message: "must be a whole number between 1 and 65535" })
+    .default(9090),
     
   GIT_SHA: z
   .string().default("dev"),
