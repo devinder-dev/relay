@@ -228,6 +228,12 @@ One thing is still open: the `read` scenario has no baseline, because it needs a
 Prometheus now evaluates backup-failure and overdue rules, but an owned notification receiver is
 still required before alert states can notify a person.
 
+Known issue since 19 Nov: under kernel 7.0.0-43, AppArmor refuses the signals Postgres's
+processes send each other, and after a reboot into it Postgres froze (the API was down for about
+50 minutes, no data lost). The server is pinned to the previous kernel, 7.0.0-38, until a fix is
+found. What happened, the checks to run after every reboot and how to remove the pin are in
+[`infra/server/README.md`](infra/server/README.md#reboots).
+
 ## Decisions
 
 - [0001: Fastify](docs/decisions/0001-web-framework-fastify.md) — familiar HTTP framework with logging, shutdown and request injection tests.
